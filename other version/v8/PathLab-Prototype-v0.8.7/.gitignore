@@ -1,0 +1,9 @@
+build/
+.vs/
+.vscode/
+.DS_Store
+*.user
+*.suo
+*.VC.db
+*.exe
+*.app
