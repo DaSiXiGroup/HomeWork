@@ -18,12 +18,15 @@ namespace pathlab {
 
     namespace {
 
-        std::string FormatDouble(double value, int digits = 2) {
+        // Format a floating point number for UI text, the original style was too ugly...
+        // also good for my eyes :)
+        std::string FormatDouble(double val, int digits = 2) {
             char buffer[64];
-            std::snprintf(buffer, sizeof(buffer), "%.*f", digits, value);
+            std::snprintf(buffer, sizeof(buffer), "%.*f", digits, val);
             return std::string(buffer);
         }
 
+        // code below is for 3D
         void DrawQuad3D(Vector3 a, Vector3 b, Vector3 c, Vector3 d, Color color) {
             DrawTriangle3D(a, b, c, color);
             DrawTriangle3D(a, c, d, color);
@@ -31,7 +34,10 @@ namespace pathlab {
             DrawTriangle3D(d, c, a, color);
         }
 
-        void DrawShadedCubeV(Vector3 center, Vector3 size, Color base) {
+        // Draw a solid cube with fake lighting, otherwise every face looks dead flat
+        // you won't understand how diffcult it is unless you do it by yourself
+        // I HATE YOU RAYLIB!
+        void DrawCubeShade(Vector3 center, Vector3 size, Color base) {
             const float x0 = center.x - size.x * 0.5f;
             const float x1 = center.x + size.x * 0.5f;
             const float y0 = center.y - size.y * 0.5f;
@@ -48,9 +54,9 @@ namespace pathlab {
             const Vector3 v110{ x1, y1, z0 };
             const Vector3 v111{ x1, y1, z1 };
 
-            const Color top = ScaleColor(base, 1.08f);
-            const Color east = ScaleColor(base, 0.92f);
-            const Color west = ScaleColor(base, 0.80f);
+            const Color top   = ScaleColor(base, 1.08f);
+            const Color east  = ScaleColor(base, 0.92f);
+            const Color west  = ScaleColor(base, 0.80f);
             const Color south = ScaleColor(base, 0.98f);
             const Color north = ScaleColor(base, 0.86f);
 
@@ -61,14 +67,15 @@ namespace pathlab {
             DrawQuad3D(v000, v100, v110, v010, north);
         }
 
-        void DrawFlatShadedCubeV(Vector3 center, Vector3 size, Color base) {
+        // Draw a thin raised plate; used for roads, water patches , etc
+        void DrawCubeFlat(Vector3 center, Vector3 size, Color base) {
             const Color top = ScaleColor(base, 1.06f);
             const Color side = ScaleColor(base, 0.94f);
-            DrawShadedCubeV(center, size, side);
+            DrawCubeShade(center, size, side);
 
             const float x0 = center.x - size.x * 0.5f;
             const float x1 = center.x + size.x * 0.5f;
-            const float y = center.y + size.y * 0.5f + 0.002f;
+            const float y  = center.y + size.y * 0.5f + 0.002f;
             const float z0 = center.z - size.z * 0.5f;
             const float z1 = center.z + size.z * 0.5f;
             DrawQuad3D({ x0, y, z0 }, { x1, y, z0 }, { x1, y, z1 }, { x0, y, z1 }, top);
@@ -77,28 +84,33 @@ namespace pathlab {
         const std::array<const char*, 5> TERRAIN_NAMES{ "Plain", "Road", "Forest", "Water", "Mountain" };
         const std::array<const char*, 4> PROFILE_NAMES{ "Pedestrian", "Car", "Offroad", "Drone" };
 
-        const char* TerrainName(TerrainType terrain) {
+        // Turn terrain enum into text for UI
+        const char* TerrainName(Terrain terrain) {
             return TERRAIN_NAMES[static_cast<size_t>(terrain)];
         }
 
-        std::string TrimDialogPath(std::string value) {
-            while (!value.empty() && (value.back() == '\n' || value.back() == '\r' || value.back() == ' ' || value.back() == '\t')) {
-                value.pop_back();
+        // I also hate you WHITE CHARS!
+        std::string TrimDialogPath(std::string val) {
+            while (!val.empty() && (val.back() == '\n' || val.back() == '\r' || val.back() == ' ' || val.back() == '\t')) {
+                val.pop_back();
             }
-            while (!value.empty() && (value.front() == '\n' || value.front() == '\r' || value.front() == ' ' || value.front() == '\t')) {
-                value.erase(value.begin());
+            while (!val.empty() && (val.front() == '\n' || val.front() == '\r' || val.front() == ' ' || val.front() == '\t')) {
+                val.erase(val.begin());
             }
-            return value;
+            return val;
         }
 
-        FILE* OpenPipe(const std::string& command) {
+        // file system, I wrote these for different OS, such as Windows and MacOS
+        // maybe Linux later?
+        FILE* OpenPipe(const std::string& cmd) {
 #ifdef _WIN32
-            return _popen(command.c_str(), "r");
+            return _popen(cmd.c_str(), "r");
 #else
-            return popen(command.c_str(), "r");
+            return popen(cmd.c_str(), "r");
 #endif
         }
 
+        // Close the cmd pipe with the matching OS call, boring but necessary
         int ClosePipe(FILE* pipe) {
 #ifdef _WIN32
             return _pclose(pipe);
@@ -107,65 +119,71 @@ namespace pathlab {
 #endif
         }
 
-        std::string CaptureCommand(const std::string& command) {
-            std::string output;
-            FILE* pipe = OpenPipe(command);
-            if (pipe == nullptr) return output;
+        // Run a tiny native cmd and capture its out; mainly for file dialogs
+        std::string CaptureCommand(const std::string& cmd) {
+            std::string out;
+            FILE* pipe = OpenPipe(cmd);
+            if (pipe == nullptr) return out;
             char buffer[512];
             while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-                output += buffer;
+                out += buffer;
             }
             ClosePipe(pipe);
-            return TrimDialogPath(output);
+            return TrimDialogPath(out);
         }
 
-        std::string NativeMapFileDialog(bool saveDialog) {
+        // Ask the OS for a map path; this part is ugly because cross-platform GUI dialogs are ugly
+        std::string MapDlg(bool save) {
 #ifdef _WIN32
-            std::string command = saveDialog
+            std::string cmd = save
                 ? "powershell -NoProfile -Sta -ExecutionPolicy Bypass -Command \"Add-Type -AssemblyName System.Windows.Forms; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $d=New-Object System.Windows.Forms.SaveFileDialog; $d.Title='Save PathLab map'; $d.Filter='PathLab Map (*.pathmap)|*.pathmap|All Files (*.*)|*.*'; $d.DefaultExt='pathmap'; $d.FileName='map.pathmap'; if($d.ShowDialog() -eq 'OK'){ Write-Output $d.FileName }\""
                 : "powershell -NoProfile -Sta -ExecutionPolicy Bypass -Command \"Add-Type -AssemblyName System.Windows.Forms; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Open PathLab map'; $d.Filter='PathLab Map (*.pathmap)|*.pathmap|All Files (*.*)|*.*'; if($d.ShowDialog() -eq 'OK'){ Write-Output $d.FileName }\"";
-            return CaptureCommand(command);
+            return CaptureCommand(cmd);
 #elif defined(__APPLE__)
-            std::string command = saveDialog
+            std::string cmd = save
                 ? "osascript -e 'POSIX path of (choose file name with prompt \"Save PathLab map\" default name \"map.pathmap\")' 2>/dev/null"
                 : "osascript -e 'POSIX path of (choose file with prompt \"Open PathLab map\")' 2>/dev/null";
-            return CaptureCommand(command);
+            return CaptureCommand(cmd);
 #else
-            std::string command = saveDialog
+            std::string cmd = save
                 ? "zenity --file-selection --save --confirm-overwrite --title='Save PathLab map' --filename='map.pathmap' 2>/dev/null"
                 : "zenity --file-selection --title='Open PathLab map' 2>/dev/null";
-            return CaptureCommand(command);
+            return CaptureCommand(cmd);
 #endif
         }
 
-        std::string EnsurePathMapExtension(std::string path) {
+        // Add .pathmap when the user forgets it, because of course someone will forget it
+        std::string FixMapExt(std::string path) {
             if (path.empty()) return path;
             std::filesystem::path p(path);
             if (p.extension().empty()) p.replace_extension(".pathmap");
             return p.string();
         }
 
-        std::string NativePngFileDialog() {
+        // Ask the OS where to save the screenshot
+        std::string PngDlg() {
 #ifdef _WIN32
-            std::string command = "powershell -NoProfile -Sta -ExecutionPolicy Bypass -Command \"Add-Type -AssemblyName System.Windows.Forms; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $d=New-Object System.Windows.Forms.SaveFileDialog; $d.Title='Export PathLab screenshot'; $d.Filter='PNG Image (*.png)|*.png|All Files (*.*)|*.*'; $d.DefaultExt='png'; $d.FileName='pathlab_screenshot.png'; if($d.ShowDialog() -eq 'OK'){ Write-Output $d.FileName }\"";
-            return CaptureCommand(command);
+            std::string cmd = "powershell -NoProfile -Sta -ExecutionPolicy Bypass -Command \"Add-Type -AssemblyName System.Windows.Forms; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $d=New-Object System.Windows.Forms.SaveFileDialog; $d.Title='Export PathLab screenshot'; $d.Filter='PNG Image (*.png)|*.png|All Files (*.*)|*.*'; $d.DefaultExt='png'; $d.FileName='pathlab_screenshot.png'; if($d.ShowDialog() -eq 'OK'){ Write-Output $d.FileName }\"";
+            return CaptureCommand(cmd);
 #elif defined(__APPLE__)
-            std::string command = "osascript -e 'POSIX path of (choose file name with prompt \"Export PathLab screenshot\" default name \"pathlab_screenshot.png\")' 2>/dev/null";
-            return CaptureCommand(command);
+            std::string cmd = "osascript -e 'POSIX path of (choose file name with prompt \"Export PathLab screenshot\" default name \"pathlab_screenshot.png\")' 2>/dev/null";
+            return CaptureCommand(cmd);
 #else
-            std::string command = "zenity --file-selection --save --confirm-overwrite --title='Export PathLab screenshot' --filename='pathlab_screenshot.png' 2>/dev/null";
-            return CaptureCommand(command);
+            std::string cmd = "zenity --file-selection --save --confirm-overwrite --title='Export PathLab screenshot' --filename='pathlab_screenshot.png' 2>/dev/null";
+            return CaptureCommand(cmd);
 #endif
         }
 
-        std::string EnsurePngExtension(std::string path) {
+        // Add .png if the dialog result has no extension
+        std::string FixPngExt(std::string path) {
             if (path.empty()) return path;
             std::filesystem::path p(path);
             if (p.extension().empty()) p.replace_extension(".png");
             return p.string();
         }
 
-        std::string CompactDisplayPath(const std::string& path) {
+        // Show only the filename in the panel; full paths are just visual pollution here
+        std::string CompactPath(const std::string& path) {
             if (path.empty()) return "No file selected";
             std::filesystem::path p(path);
             std::string name = p.filename().string();
@@ -173,26 +191,34 @@ namespace pathlab {
             return name.size() > 34 ? (name.substr(0, 31) + "...") : name;
         }
 
+        // to be consist with raylib, I use Vec2 for every 2D vector
+        // awful namestyle
+        // I hate this
         float Vec2Distance(Vector2 a, Vector2 b) {
             const float dx = a.x - b.x;
             const float dy = a.y - b.y;
             return std::sqrt(dx * dx + dy * dy);
         }
 
+        // OK so I forgot how to use friend
+        // but it doesn't matter (?
         Vector2 Vec2Add(Vector2 a, Vector2 b) { return Vector2{ a.x + b.x, a.y + b.y }; }
         Vector2 Vec2Sub(Vector2 a, Vector2 b) { return Vector2{ a.x - b.x, a.y - b.y }; }
         Vector2 Vec2Scale(Vector2 v, float s) { return Vector2{ v.x * s, v.y * s }; }
 
+        // Length of a 2D vector.
         float Vec2Length(Vector2 v) {
             return std::sqrt(v.x * v.x + v.y * v.y);
         }
 
+        // that means, to make a vector's length 1
         Vector2 Vec2Normalize(Vector2 v) {
             const float len = Vec2Length(v);
             if (len <= 0.0001f) return Vector2{ 0.0f, 0.0f };
             return Vector2{ v.x / len, v.y / len };
         }
 
+        // Distance between two 3D points, used by path tubes and picking helpers
         float Vec3Distance(Vector3 a, Vector3 b) {
             const float dx = a.x - b.x;
             const float dy = a.y - b.y;
@@ -204,17 +230,22 @@ namespace pathlab {
         Vector3 Vec3Sub(Vector3 a, Vector3 b) { return Vector3{ a.x - b.x, a.y - b.y, a.z - b.z }; }
         Vector3 Vec3Scale(Vector3 v, float s) { return Vector3{ v.x * s, v.y * s, v.z * s }; }
 
+        // Length of a 3D vector
         float Vec3Length(Vector3 v) {
             return std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
         }
 
+        // that means, to make a vector's length 1
         Vector3 Vec3Normalize(Vector3 v) {
             const float len = Vec3Length(v);
             if (len <= 0.0001f) return Vector3{ 0.0f, 0.0f, 0.0f };
             return Vector3{ v.x / len, v.y / len, v.z / len };
         }
 
-        Vector2 QuadraticBezier2(Vector2 a, Vector2 control, Vector2 b, float t) {
+        // a trick for your dad SDLTF
+        // so these two function are used to make the path more smooth
+        // I don't think it's neccessary but it's good for my eyes
+        Vector2 QuadBez2(Vector2 a, Vector2 control, Vector2 b, float t) {
             const float u = 1.0f - t;
             return Vector2{
                 u * u * a.x + 2.0f * u * t * control.x + t * t * b.x,
@@ -222,7 +253,8 @@ namespace pathlab {
             };
         }
 
-        Vector3 QuadraticBezier3(Vector3 a, Vector3 control, Vector3 b, float t) {
+        // 3D quadratic Bezier point; same trick, but for the tube path
+        Vector3 QuadBez3(Vector3 a, Vector3 control, Vector3 b, float t) {
             const float u = 1.0f - t;
             return Vector3{
                 u * u * a.x + 2.0f * u * t * control.x + t * t * b.x,
@@ -231,8 +263,12 @@ namespace pathlab {
             };
         }
 
-        std::vector<Vector2> CompressPolyline2D(const std::vector<Vector2>& points) {
-            if (points.size() <= 2) return points;
+
+        // OK so these two function is used to simply the path
+        // for example, think about there are three points A, B, C, which are all in a line
+        // so you don't have to draw point B, we just care avbout the begin and the end
+        std::vector<Vector2> ZipLine2(const std::vector<Vector2>& points) {
+            if (points.size() <= 2) return points; // corner case
             std::vector<Vector2> out;
             out.push_back(points.front());
             for (size_t i = 1; i + 1 < points.size(); ++i) {
@@ -246,7 +282,8 @@ namespace pathlab {
             return out;
         }
 
-        std::vector<Vector3> CompressPolyline3D(const std::vector<Vector3>& points) {
+        // Remove useless middle points on straight 3D segments; otherwise smoothing overworks itself
+        std::vector<Vector3> ZipLine3(const std::vector<Vector3>& points) {
             if (points.size() <= 2) return points;
             std::vector<Vector3> out;
             out.push_back(points.front());
@@ -264,8 +301,10 @@ namespace pathlab {
             return out;
         }
 
-        std::vector<Vector2> RoundedPolyline2D(const std::vector<Vector2>& points, float radius, int curveSteps) {
-            std::vector<Vector2> p = CompressPolyline2D(points);
+        // these two function is for turning the hard path into smooth path
+		// use these function after ZipLine2 or ZipLine3
+        std::vector<Vector2> RoundLine2(const std::vector<Vector2>& points, float radius, int curveSteps) {
+            std::vector<Vector2> p = ZipLine2(points);
             if (p.size() <= 2) return p;
             std::vector<Vector2> out;
             out.reserve(p.size() * static_cast<size_t>(curveSteps + 2));
@@ -284,15 +323,15 @@ namespace pathlab {
                 Vector2 b = Vec2Add(corner, Vec2Scale(outDir, trim));
                 if (Vec2Distance(out.back(), a) > 0.35f) out.push_back(a);
                 for (int s = 1; s <= curveSteps; ++s) {
-                    out.push_back(QuadraticBezier2(a, corner, b, static_cast<float>(s) / static_cast<float>(curveSteps)));
+                    out.push_back(QuadBez2(a, corner, b, static_cast<float>(s) / static_cast<float>(curveSteps)));
                 }
             }
             if (Vec2Distance(out.back(), p.back()) > 0.35f) out.push_back(p.back());
             return out;
         }
 
-        std::vector<Vector3> RoundedPolyline3D(const std::vector<Vector3>& points, float radius, int curveSteps) {
-            std::vector<Vector3> p = CompressPolyline3D(points);
+        std::vector<Vector3> RoundLine3(const std::vector<Vector3>& points, float radius, int curveSteps) {
+            std::vector<Vector3> p = ZipLine3(points);
             if (p.size() <= 2) return p;
             std::vector<Vector3> out;
             out.reserve(p.size() * static_cast<size_t>(curveSteps + 2));
@@ -311,20 +350,21 @@ namespace pathlab {
                 Vector3 b       = Vec3Add(corner, Vec3Scale(outDir, trim));
                 if (Vec3Distance(out.back(), a) > 0.02f) out.push_back(a);
                 for (int s = 1; s <= curveSteps; ++s) {
-                    out.push_back(QuadraticBezier3(a, corner, b, static_cast<float>(s) / static_cast<float>(curveSteps)));
+                    out.push_back(QuadBez3(a, corner, b, static_cast<float>(s) / static_cast<float>(curveSteps)));
                 }
             }
             if (Vec3Distance(out.back(), p.back()) > 0.02f) out.push_back(p.back());
             return out;
         }
 
-        void DrawPathLine2D(const std::vector<Vector2>& points, float width, Color outline, Color core) {
+        // So we can draw line now!
+        void DrawPath2D(const std::vector<Vector2>& points, float width, Color outline, Color core) {
             if (points.size() < 2) return;
             for (size_t i = 1; i < points.size(); ++i) DrawLineEx(points[i - 1], points[i], width + 3.0f, outline);
             for (size_t i = 1; i < points.size(); ++i) DrawLineEx(points[i - 1], points[i], width, core);
         }
 
-        void DrawPathTube3D(const std::vector<Vector3>& points, float radius, Color outline, Color core) {
+        void DrawTube3D(const std::vector<Vector3>& points, float radius, Color outline, Color core) {
             if (points.size() < 2) return;
             for (size_t i = 1; i < points.size(); ++i) {
                 if (Vec3Distance(points[i - 1], points[i]) > 0.001f) {
@@ -341,19 +381,23 @@ namespace pathlab {
             DrawSphere(points.back(), radius * 1.25f, core);
         }
 
-        Color ProfileColor(MovementProfile profile, ThemeMode theme) {
-            const int id = static_cast<int>(profile);
-            if (id < 0 || id >= static_cast<int>(ColorSet::ProfileDark.size())) {
-                return PickColor(theme, ColorSet::ProfileFallbackDark, ColorSet::ProfileFallbackLight);
+        // this function is for make choose the color
+        Color ProfileColor(MoveProfile prof, Theme theme) {
+            const int id = static_cast<int>(prof);
+            if (id < 0 || id >= static_cast<int>(Pal::ProfD.size())) {
+                return PickColor(theme, Pal::ProfFallbackD, Pal::ProfFallbackL);
             }
             const size_t index = static_cast<size_t>(id);
-            return PickColor(theme, ColorSet::ProfileDark[index], ColorSet::ProfileLight[index]);
+            return PickColor(theme, Pal::ProfD[index], Pal::ProfL[index]);
         }
 
-        const char* ProfileDisplayName(MovementProfile profile) {
-            return PROFILE_NAMES[static_cast<size_t>(profile)];
+        // Turn movement prof enum into UI text
+        const char* ProfNameOf(MoveProfile prof) {
+            return PROFILE_NAMES[static_cast<size_t>(prof)];
         }
 
+        // this function is for choose the font
+        // I haven't tried other font anyway
         const std::array<const char*, 17>& FontCandidates() {
             static const std::array<const char*, 17> fonts{
                 "assets/fonts/ui.ttf",
@@ -378,19 +422,23 @@ namespace pathlab {
         }
     }
 
+    // Construct the app and give it a map immediately
+    // we design this to avoid a temp window
     App::App() : __map(35, 55) {
-        __GenerateRandomMap();
+        __GenRandom();
     }
 
+    // Main application loop: layout, update, draw, repeat until the window closes
     void App::Run() {
         SetConfigFlags(FLAG_WINDOW_RESIZABLE | FLAG_MSAA_4X_HINT | FLAG_WINDOW_MAXIMIZED);
-        InitWindow(__windowWidth, __windowHeight, "PathLab Prototype v1.1.1 - fixed solid 3D rendering order");
+        InitWindow(__WIN_W, __WIN_H, "PathLab Prototype v1.1.1, from DaSiXi Group");
         SetWindowMinSize(1280, 760);
         MaximizeWindow();
-        SetTargetFPS(60);
-        __uiFont = GetFontDefault();
-        __LoadUIFont();
-        __ResetCamera3D();
+        SetTargetFPS(60); // Liushi Zhen ? Liu Shizhen!
+        // bbgyfddd
+        __font = GetFontDefault();
+        __LoadFont();
+        __ResetCam();
 
         while (!WindowShouldClose()) {
             __Layout();
@@ -398,215 +446,258 @@ namespace pathlab {
             __Draw();
         }
 
-        __UnloadUIFont();
+        __UnloadFont();
         CloseWindow();
     }
 
+    // Recalculate panel rectangles after resize
+    // UI coordinates all start from here
     void App::__Layout() {
-        __UpdateUIScale();
+        __UpdateScale();
 
         const float topH    = __S(64.0f);
         const float bottomH = __S(96.0f);
         const float leftW   = __S(360.0f);
         const float rightW  = __S(410.0f);
 
-        __leftPanel     = { 0, topH, leftW, static_cast<float>(GetScreenHeight()) - topH - bottomH };
-        __rightPanel    = { static_cast<float>(GetScreenWidth()) - rightW, topH, rightW, static_cast<float>(GetScreenHeight()) - topH - bottomH };
+        __lPanel     = { 0, topH, leftW, static_cast<float>(GetScreenHeight()) - topH - bottomH };
+        __rPanel    = { static_cast<float>(GetScreenWidth()) - rightW, topH, rightW, static_cast<float>(GetScreenHeight()) - topH - bottomH };
         __canvas        = { leftW, topH, static_cast<float>(GetScreenWidth()) - leftW - rightW, static_cast<float>(GetScreenHeight()) - topH - bottomH };
-        __bottomPanel   = { 0, static_cast<float>(GetScreenHeight()) - bottomH, static_cast<float>(GetScreenWidth()), bottomH };
+        __bPanel   = { 0, static_cast<float>(GetScreenHeight()) - bottomH, static_cast<float>(GetScreenWidth()), bottomH };
     }
 
+    // Handle keyboard, mouse, scrolling, camera and animation state each frm
     void App::__Update() {
+        // so there comes the update by keyboard
         if (IsKeyPressed(KEY_F11)) {
-            __ToggleFullscreenMode();
+            // F11
+            __ToggleFull();
         }
-        if (IsKeyPressed(KEY_F10) && !__fullscreen) {
+        if (IsKeyPressed(KEY_F10) && !__full) {
+            // F10
             MaximizeWindow();
         }
         if (IsKeyPressed(KEY_F5)) {
-            __ToggleViewMode();
+            // F5
+            __ToggleView();
         }
         if (IsKeyPressed(KEY_F6)) {
-            __ToggleThemeMode();
+            // F6
+            __ToggleTheme();
         }
         if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_Z)) {
+            // Ctrl + Z
             __UndoEdit();
         }
         if ((IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) && IsKeyPressed(KEY_Y)) {
+            // Ctrl + Y
             __RedoEdit();
         }
         if (IsMouseButtonReleased(MOUSE_LEFT_BUTTON) || IsMouseButtonReleased(MOUSE_RIGHT_BUTTON)) {
-            __lastEditedCell = -1;
+            // left button add, right button remove
+            __lastCell = -1;
         }
         const Vector2 mouse = GetMousePosition();
         const float wheel = GetMouseWheelMove();
-        if (std::abs(wheel) > 0.001f && CheckCollisionPointRec(mouse, __leftPanel)) {
-            __leftPanelScroll = std::clamp(__leftPanelScroll + wheel * __S(54.0f), -__S(760.0f), 0.0f);
+        if (std::abs(wheel) > 0.001f && CheckCollisionPointRec(mouse, __lPanel)) {
+            __lScroll = std::clamp(__lScroll + wheel * __S(54.0f), -__S(760.0f), 0.0f);
         }
-        else if (std::abs(wheel) > 0.001f && CheckCollisionPointRec(mouse, __rightPanel)) {
-            __rightPanelScroll = std::clamp(__rightPanelScroll + wheel * __S(54.0f), -__S(660.0f), 0.0f);
+        else if (std::abs(wheel) > 0.001f && CheckCollisionPointRec(mouse, __rPanel)) {
+            __rScroll = std::clamp(__rScroll + wheel * __S(54.0f), -__S(660.0f), 0.0f);
         }
-        else if (__view3D) {
-            __UpdateCamera3D();
+        else if (__is3D) {
+            __UpdateCam();
         }
         else if (CheckCollisionPointRec(mouse, __canvas)) {
+            // ok so if you don't use abs
+            // you'll fail
             if (std::abs(wheel) > 0.001f) {
-                const float oldZoom     =   __mapZoom2D;
-                __mapZoom2D             *=  std::pow(1.12f, wheel);
-                __mapZoom2D             =   std::clamp(__mapZoom2D, 0.55f, 5.0f);
-                const float zoomRatio   =   __mapZoom2D / oldZoom;
+                const float oldZoom     =   __zoom2D;
+                __zoom2D                *=  std::pow(1.12f, wheel);
+                __zoom2D                =   std::clamp(__zoom2D, 0.55f, 5.0f);
+                const float zoomRatio   =   __zoom2D / oldZoom;
                 Vector2 center{ __canvas.x + __canvas.width * 0.5f, __canvas.y + __canvas.height * 0.5f };
-                __mapPan2D.x = mouse.x - center.x - (mouse.x - center.x - __mapPan2D.x) * zoomRatio;
-                __mapPan2D.y = mouse.y - center.y - (mouse.y - center.y - __mapPan2D.y) * zoomRatio;
-                __statusMessage = "2D zoom: " + FormatDouble(__mapZoom2D, 2) + "x";
+                __pan2D.x = mouse.x - center.x - (mouse.x - center.x - __pan2D.x) * zoomRatio;
+                __pan2D.y = mouse.y - center.y - (mouse.y - center.y - __pan2D.y) * zoomRatio;
+                __status  = "2D zoom: " + FormatDouble(__zoom2D, 2) + "x";
             }
+            // xuanzhuan, tiaoyue, wo bi zhe yan ~
             if (IsMouseButtonDown(MOUSE_MIDDLE_BUTTON)) {
                 Vector2 delta = GetMouseDelta();
-                __mapPan2D.x += delta.x;
-                __mapPan2D.y += delta.y;
+                __pan2D.x += delta.x;
+                __pan2D.y += delta.y;
             }
         }
 
-        __HandleMapEditing();
+        __HandleEdit();
 
-        if (__playing && __hasResult && __FrameCount() > 0) {
-            __accumulator += GetFrameTime();
-            const float interval = 1.0f / std::max(1.0f, __animationSpeed);
-            while (__accumulator >= interval) {
-                __accumulator -= interval;
-                __frameIndex++;
-                if (__frameIndex >= __FrameCount() - 1) {
-                    __frameIndex    = __FrameCount() - 1;
-                    __playing       = false;
-                    __statusMessage = "Animation finished";
+        if (__play && __hasRes && __FrameCnt() > 0) {
+            __acc += GetFrameTime();
+            const float interval = 1.0f / std::max(1.0f, __animSpd);
+            while (__acc >= interval) {
+                __acc -= interval;
+                __frmIdx++;
+                if (__frmIdx >= __FrameCnt() - 1) {
+                    __frmIdx = __FrameCnt() - 1;
+                    __play   = false;
+                    __status = "Animation finished";
                     break;
                 }
             }
         }
     }
 
+    // Draw the whole frm in the correct order
+    // background first, panels later, map in between
     void App::__Draw() {
         BeginDrawing();
         ClearBackground(__CanvasColor());
 
         __DrawTopBar();
-        __DrawLeftPanel();
-        __DrawRightPanel();
-        __DrawBottomPanel();
-        if (__view3D) {
-            __DrawTerrain3D();
+        __DrawLeft();
+        __DrawRight();
+        __DrawBottom();
+        if (__is3D) {
+            __Draw3D();
         }
         else {
-            __DrawMapCanvas();
+            __DrawMap();
         }
 
         EndDrawing();
     }
 
-    void App::__UpdateUIScale() {
+    // Scale UI from cur window size
+    void App::__UpdateScale() {
         const float widthScale = static_cast<float>(GetScreenWidth()) / 1440.0f;
         const float heightScale = static_cast<float>(GetScreenHeight()) / 900.0f;
-        __uiScale = std::clamp(std::min(widthScale, heightScale), 0.95f, 1.35f);
+        __scale = std::clamp(std::min(widthScale, heightScale), 0.95f, 1.35f);
     }
 
-    void App::__ToggleFullscreenMode() {
-        if (!__fullscreen) {
-            __windowedWidth     = GetScreenWidth();
-            __windowedHeight    = GetScreenHeight();
+    // Switch between fullscreen and windowed mode while remembering old window size
+    // I HATE WINDOW SIZE!
+    void App::__ToggleFull() {
+        if (!__full) {
+            __winW = GetScreenWidth();
+            __winH = GetScreenHeight();
             const int monitor   = GetCurrentMonitor();
             SetWindowSize(GetMonitorWidth(monitor), GetMonitorHeight(monitor));
             ToggleFullscreen();
-            __fullscreen    = true;
-            __statusMessage = "Fullscreen enabled; press F11 to return";
+            __full    = true;
+            __status = "Fullscreen enabled; press F11 to return";
         }
         else {
             ToggleFullscreen();
-            SetWindowSize(__windowedWidth, __windowedHeight);
-            __fullscreen    = false;
-            __statusMessage = "Windowed mode restored";
+            SetWindowSize(__winW, __winH);
+            __full   = false;
+            __status = "Windowed mode restored";
         }
     }
 
-    void App::__ToggleViewMode() {
-        __view3D = !__view3D;
-        if (__view3D) {
-            __ResetCamera3D();
-            __statusMessage = "3D terrain view enabled. Left click selects/edits; right or middle drag rotates.";
+    // Toggle 2D editor and 3D terrain view
+    void App::__ToggleView() {
+        __is3D = !__is3D;
+        if (__is3D) {
+            __ResetCam();
+            __status = "3D terrain view enabled. Left click selects/edits; right or middle drag rotates.";
         }
         else {
-            __statusMessage = "2D map view enabled. Editing tools are available.";
+            __status = "2D map view enabled. Editing tools are available.";
         }
     }
 
-    void App::__ToggleThemeMode() {
-        __themeMode = (__themeMode == ThemeMode::Light) ? ThemeMode::Dark : ThemeMode::Light;
-        __statusMessage = "Theme switched to " + __ThemeName() + ".";
+    // Toggle light and dark theme
+    // From where I stand I prefer dark model
+    // but not every one share the same taste with me
+    // Oh my god~ ni xia dao wo le ~
+    void App::__ToggleTheme() {
+        __theme = (__theme == Theme::Light) ? Theme::Dark : Theme::Light;
+        __status = "Theme switched to " + __ThemeName() + ".";
     }
 
+    // OK so the most awful part comes~
+    // what if I don't use two seperate theme ...
+    
+    // Theme-aware normal panel color
     Color App::__PanelColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::PanelDark : ColorSet::PanelLight;
+        return __theme == Theme::Dark ? Pal::PanelD : Pal::PanelL;
     }
 
-    Color App::__DarkPanelColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::PanelDeepDark : ColorSet::PanelDeepLight;
+    // Theme-aware darker panel color for bars and timeline
+    Color App::__PanelDeep() const {
+        return __theme == Theme::Dark ? Pal::PanelDeepD : Pal::PanelDeepL;
     }
 
+    // Main accent color used by selected buttons and highlights
     Color App::__AccentColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::AccentDark : ColorSet::AccentLight;
+        return __theme == Theme::Dark ? Pal::AccentD : Pal::AccentL;
     }
 
+    // Main readable text color for cur theme
     Color App::__TextColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::TextDark : ColorSet::TextLight;
+        return __theme == Theme::Dark ? Pal::TextD : Pal::TextL;
     }
 
-    Color App::__MutedTextColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::TextMutedDark : ColorSet::TextMutedLight;
+    // Secondary text color
+    Color App::__MutedColor() const {
+        return __theme == Theme::Dark ? Pal::TextMuteD : Pal::TextMuteL;
     }
 
-    Color App::__GridLineColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::GridLineDark : ColorSet::GridLineLight;
+    // Grid and panel border color for cur theme
+    Color App::__GridColor() const {
+        return __theme == Theme::Dark ? Pal::GridD : Pal::GridL;
     }
 
+    // Color for goal, failed result and warning text
     Color App::__DangerColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::DangerDark : ColorSet::DangerLight;
+        return __theme == Theme::Dark ? Pal::DangerD : Pal::DangerL;
     }
 
+    // Color for start point and successful result
     Color App::__SuccessColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::SuccessDark : ColorSet::SuccessLight;
+        return __theme == Theme::Dark ? Pal::SuccessD : Pal::SuccessL;
     }
 
+    // Background color of the map canvas
     Color App::__CanvasColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::CanvasDark : ColorSet::CanvasLight;
+        return __theme == Theme::Dark ? Pal::CanvasD : Pal::CanvasL;
     }
 
+    // Overlay color for hover and selection markers
     Color App::__OverlayColor() const {
-        return __themeMode == ThemeMode::Dark ? ColorSet::OverlayDark : ColorSet::OverlayLight;
+        return __theme == Theme::Dark ? Pal::OverlayD : Pal::OverlayL;
     }
 
-    Color App::__TerrainVisualColor(TerrainType terrain, float heightNorm, bool sideFace) const {
-        heightNorm = std::clamp(heightNorm, 0.0f, 1.0f);
+    // Convert terrain plus height into a visual color, including side-face shading
+    // you know in geography, we use darker color to present higher height
+    // so I think this is a good idea, and I use this
+    Color App::__TerrainColor(Terrain terrain, float h01, bool side) const {
+        h01 = std::clamp(h01, 0.0f, 1.0f);
 
         int id = static_cast<int>(terrain);
-        if (id < 0 || id >= static_cast<int>(ColorSet::TerrainDark.size())) id = 0;
+        if (id < 0 || id >= static_cast<int>(Pal::TerrD.size())) id = 0;
 
-        const auto& ramp = (__themeMode == ThemeMode::Dark ? ColorSet::TerrainDark : ColorSet::TerrainLight)[static_cast<size_t>(id)];
-        Color color = heightNorm < 0.55f
-            ? Blend(ramp.low, ramp.mid, heightNorm / 0.55f)
-            : Blend(ramp.mid, ramp.high, (heightNorm - 0.55f) / 0.45f);
+        const auto& ramp = (__theme == Theme::Dark ? Pal::TerrD : Pal::TerrL)[static_cast<size_t>(id)];
+        Color color = h01 < 0.55f
+            ? Blend(ramp.low, ramp.mid, h01 / 0.55f)
+            : Blend(ramp.mid, ramp.high, (h01 - 0.55f) / 0.45f);
 
-        if (sideFace) {
+        if (side) {
             const Color shade = PickColor(
-                __themeMode,
-                WithAlpha(ColorSet::TerrainSideShadeDark, color.a),
-                WithAlpha(ColorSet::TerrainSideShadeLight, color.a));
-            color = Blend(color, shade, __themeMode == ThemeMode::Dark ? 0.22f : 0.18f);
+                __theme,
+                WithAlpha(Pal::TerrShadeD, color.a),
+                WithAlpha(Pal::TerrShadeL, color.a));
+            color = Blend(color, shade, __theme == Theme::Dark ? 0.22f : 0.18f);
         }
         return color;
     }
-    void App::__DrawGradientBackground(Rectangle bounds) const {
-        Color top       = __themeMode == ThemeMode::Dark ? ColorSet::GradientTopDark    : ColorSet::GradientTopLight;
-        Color mid       = __themeMode == ThemeMode::Dark ? ColorSet::GradientMidDark    : ColorSet::GradientMidLight;
-        Color bottom    = __themeMode == ThemeMode::Dark ? ColorSet::GradientBottomDark : ColorSet::GradientBottomLight;
+
+    // Draw the soft 3D background gradient
+    // caz pure solid color looked too cheap
+    void App::__DrawGradBg(Rectangle box) const {
+        Color top       = __theme == Theme::Dark ? Pal::GradTopD    : Pal::GradTopL;
+        Color mid       = __theme == Theme::Dark ? Pal::GradMidD    : Pal::GradMidL;
+        Color bottom    = __theme == Theme::Dark ? Pal::GradBotD : Pal::GradBotL;
 
         const int strips = 96;
         for (int i = 0; i < strips; ++i) {
@@ -614,446 +705,458 @@ namespace pathlab {
             float t1    = static_cast<float>(i + 1) / static_cast<float>(strips);
             float midT  = (t0 + t1) * 0.5f;
             Color c     = midT < 0.52f ? Blend(top, mid, midT / 0.52f) : Blend(mid, bottom, (midT - 0.52f) / 0.48f);
-            Rectangle strip{ bounds.x, bounds.y + bounds.height * t0, bounds.width, bounds.height * (t1 - t0) + 1.0f };
+            Rectangle strip{ box.x, box.y + box.height * t0, box.width, box.height * (t1 - t0) + 1.0f };
             DrawRectangleRec(strip, c);
         }
     }
 
-    void App::__ResetCamera3D() {
+    // Reset the 3D camera to a sane angle for the cur map size
+    void App::__ResetCam() {
         const float mapSize = static_cast<float>(std::max(__map.Rows(), __map.Cols()));
-        __cameraTarget      = { 0.0f, __smoothTerrain3D ? 0.55f : 0.0f, 0.0f };
-        __cameraDistance    = std::max(__smoothTerrain3D ? 24.0f : 28.0f, mapSize * (__smoothTerrain3D ? 0.82f : 0.95f));
-        __cameraYaw         = 0.78f;
-        __cameraPitch       = __smoothTerrain3D ? 0.70f : 0.58f;
+        __camTar   = { 0.0f, __smooth3D ? 0.55f : 0.0f, 0.0f };
+        __camDist  = std::max(__smooth3D ? 24.0f : 28.0f, mapSize * (__smooth3D ? 0.82f : 0.95f));
+        __camYaw   = 0.78f;
+        __camPitch = __smooth3D ? 0.70f : 0.58f;
 
         __camera.up         = { 0.0f, 1.0f, 0.0f };
-        __camera.fovy       = __smoothTerrain3D ? 38.0f : 45.0f;
+        __camera.fovy       = __smooth3D ? 38.0f : 45.0f;
         __camera.projection = CAMERA_PERSPECTIVE;
-        __UpdateCamera3D();
+        __UpdateCam();
     }
 
-    void App::__UpdateCamera3D() {
+    // Update 3D orbit camera and keyboard panning
+    void App::__UpdateCam() {
         if (IsKeyPressed(KEY_R) && CheckCollisionPointRec(GetMousePosition(), __canvas)) {
-            __ResetCamera3D();
+            __ResetCam();
         }
 
         if (CheckCollisionPointRec(GetMousePosition(), __canvas)) {
             Vector2 delta = GetMouseDelta();
             if (IsMouseButtonDown(MOUSE_RIGHT_BUTTON) || IsMouseButtonDown(MOUSE_MIDDLE_BUTTON)) {
-                __cameraYaw     -=  delta.x * 0.008f;
-                __cameraPitch   +=  delta.y * 0.008f;
-                __cameraPitch   =   std::clamp(__cameraPitch, 0.18f, 1.34f);
+                __camYaw   -= delta.x * 0.008f;
+                __camPitch += delta.y * 0.008f; // ok so why 0.008f? because I like it
+                                                // you don't have to do so
+                __camPitch =  std::clamp(__camPitch, 0.18f, 1.34f);
             }
 
             float wheel = GetMouseWheelMove();
             if (std::abs(wheel) > 0.001f) {
-                __cameraDistance *= (1.0f - wheel * 0.10f);
-                __cameraDistance =  std::clamp(__cameraDistance, 12.0f, 180.0f);
+                __camDist *= (1.0f - wheel * 0.10f);
+                __camDist =  std::clamp(__camDist, 12.0f, 180.0f);
             }
         }
 
-        float move = GetFrameTime() * __cameraDistance * 0.55f;
-        Vector3 forward{ static_cast<float>(std::sin(__cameraYaw)), 0.0f, static_cast<float>(std::cos(__cameraYaw)) };
-        Vector3 right{ static_cast<float>(std::cos(__cameraYaw)), 0.0f, static_cast<float>(-std::sin(__cameraYaw)) };
+        float move = GetFrameTime() * __camDist * 0.55f;
+        Vector3 forward{ static_cast<float>(std::sin(__camYaw)), 0.0f, static_cast<float>(std::cos(__camYaw)) };
+        Vector3 right{ static_cast<float>(std::cos(__camYaw)), 0.0f, static_cast<float>(-std::sin(__camYaw)) };
         if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) move *= 2.0f;
 
         if (IsKeyDown(KEY_W)) {
-            __cameraTarget.x += forward.x * move;
-            __cameraTarget.z += forward.z * move;
+            __camTar.x += forward.x * move;
+            __camTar.z += forward.z * move;
         }
         if (IsKeyDown(KEY_S)) {
-            __cameraTarget.x -= forward.x * move;
-            __cameraTarget.z -= forward.z * move;
+            __camTar.x -= forward.x * move;
+            __camTar.z -= forward.z * move;
         }
         if (IsKeyDown(KEY_D)) {
-            __cameraTarget.x += right.x * move;
-            __cameraTarget.z += right.z * move;
+            __camTar.x += right.x * move;
+            __camTar.z += right.z * move;
         }
         if (IsKeyDown(KEY_A)) {
-            __cameraTarget.x -= right.x * move;
-            __cameraTarget.z -= right.z * move;
+            __camTar.x -= right.x * move;
+            __camTar.z -= right.z * move;
         }
-        if (IsKeyDown(KEY_E)) __cameraTarget.y += move * 0.35f;
-        if (IsKeyDown(KEY_Q)) __cameraTarget.y -= move * 0.35f;
+        if (IsKeyDown(KEY_E)) __camTar.y += move * 0.35f;
+        if (IsKeyDown(KEY_Q)) __camTar.y -= move * 0.35f;
 
-        const float cp = static_cast<float>(std::cos(__cameraPitch));
-        __camera.target = __cameraTarget;
+        const float cp = static_cast<float>(std::cos(__camPitch));
+        __camera.target = __camTar;
         __camera.position = {
-            __cameraTarget.x + __cameraDistance * static_cast<float>(std::sin(__cameraYaw)) * cp,
-            __cameraTarget.y + __cameraDistance * static_cast<float>(std::sin(__cameraPitch)),
-            __cameraTarget.z + __cameraDistance * static_cast<float>(std::cos(__cameraYaw)) * cp
+            __camTar.x + __camDist * static_cast<float>(std::sin(__camYaw)) * cp,
+            __camTar.y + __camDist * static_cast<float>(std::sin(__camPitch)),
+            __camTar.z + __camDist * static_cast<float>(std::cos(__camYaw)) * cp
         };
     }
 
+    // OK LET'S DRAW!
+    // I think maybe QT is a good choice for GUI in this situation
+    // but I don't know how to use QT :(
     void App::__DrawTopBar() {
-        DrawRectangle(0, 0, GetScreenWidth(), static_cast<int>(__S(64.0f)), __DarkPanelColor());
-        __DrawTextUIBold("PathLab", __S(20), __S(15), 27, __TextColor());
-        __DrawTextUI("v1.1.1", __S(128), __S(24), 15, __MutedTextColor());
+        DrawRectangle(0, 0, GetScreenWidth(), static_cast<int>(__S(64.0f)), __PanelDeep());
+        __TextBold("PathLab", __S(20), __S(15), 27, __TextColor());
+        __Text("v1.1.1", __S(128), __S(24), 15, __MutedColor());
 
-        const float buttonW = __S(132.0f);
-        const float buttonH = __S(36.0f);
-        const float gap = __S(12.0f);
-        float cx = static_cast<float>(GetScreenWidth()) * 0.5f - (buttonW * 3.0f + gap * 2.0f) * 0.5f;
-        if (__Button({ cx, __S(14.0f), buttonW, buttonH }, __view3D ? "View: 3D" : "View: 2D")) {
-            __ToggleViewMode();
+        const float btnW = __S(132.0f);
+        const float btnH = __S(36.0f);
+        const float gap  = __S(12.0f);
+        float cx = static_cast<float>(GetScreenWidth()) * 0.5f - (btnW * 3.0f + gap * 2.0f) * 0.5f;
+        if (__Button({ cx, __S(14.0f), btnW, btnH }, __is3D ? "View: 3D" : "View: 2D")) {
+            __ToggleView();
         }
-        if (__Button({ cx + buttonW + gap, __S(14.0f), buttonW, buttonH }, __themeMode == ThemeMode::Dark ? "Theme: Dark" : "Theme: Light")) {
-            __ToggleThemeMode();
+        if (__Button({ cx + btnW + gap, __S(14.0f), btnW, btnH }, __theme == Theme::Dark ? "Theme: Dark" : "Theme: Light")) {
+            __ToggleTheme();
         }
-        if (__Button({ cx + (buttonW + gap) * 2.0f, __S(14.0f), buttonW, buttonH }, __view3D ? "Reset 3D" : "Reset 2D")) {
-            if (__view3D) {
-                __ResetCamera3D();
-                __statusMessage = "3D camera reset";
+        if (__Button({ cx + (btnW + gap) * 2.0f, __S(14.0f), btnW, btnH }, __is3D ? "Reset 3D" : "Reset 2D")) {
+            if (__is3D) {
+                __ResetCam();
+                __status = "3D camera reset";
             }
             else {
-                __mapZoom2D     = 1.0f;
-                __mapPan2D      = { 0.0f, 0.0f };
-                __statusMessage = "2D view reset";
+                __zoom2D = 1.0f;
+                __pan2D  = { 0.0f, 0.0f };
+                __status = "2D view reset";
             }
         }
 
-        const char* shortcuts = __fullscreen ? "F11 exit | F5 view | F6 theme | wheel zoom" : "F11 fullscreen | F10 maximize | F5 view | F6 theme | wheel zoom";
-        __DrawTextUI(shortcuts, static_cast<float>(GetScreenWidth()) - __S(610.0f), __S(23.0f), 14, __MutedTextColor());
+        const char* shortcuts = __full ? "F11 exit | F5 view | F6 theme | wheel zoom" : "F11 fullscreen | F10 maximize | F5 view | F6 theme | wheel zoom";
+        __Text(shortcuts, static_cast<float>(GetScreenWidth()) - __S(610.0f), __S(23.0f), 14, __MutedColor());
     }
 
-    void App::__DrawLeftPanel() {
-        DrawRectangleRec(__leftPanel, __PanelColor());
-        DrawRectangleLinesEx(__leftPanel, 1.0f, __GridLineColor());
-        BeginScissorMode(static_cast<int>(__leftPanel.x), static_cast<int>(__leftPanel.y), static_cast<int>(__leftPanel.width), static_cast<int>(__leftPanel.height));
+    // Draw map generation, alg and cost controls on the left
+    void App::__DrawLeft() {
+        DrawRectangleRec(__lPanel, __PanelColor());
+        DrawRectangleLinesEx(__lPanel, 1.0f, __GridColor());
+        BeginScissorMode(static_cast<int>(__lPanel.x), static_cast<int>(__lPanel.y), static_cast<int>(__lPanel.width), static_cast<int>(__lPanel.height));
 
-        float       x           = __leftPanel.x + __S(22.0f);
-        float       y           = __leftPanel.y + __S(18.0f) + __leftPanelScroll;
-        const float contentW    = __leftPanel.width - __S(40.0f);
-        const float gap         = __S(10.0f);
-        const float bw          = (contentW - gap) * 0.5f;
+        float       x   = __lPanel.x + __S(22.0f);
+        float       y   = __lPanel.y + __S(18.0f) + __lScroll;
+        const float cw  = __lPanel.width - __S(40.0f);
+        const float gap = __S(10.0f);
+        const float bw  = (cw - gap) * 0.5f;
 
         auto section = [&](const char* title) {
-            __DrawTextUIBold(title, x, y, 20, __TextColor());
-            DrawRectangleRec({ x, y + __S(29.0f), contentW, 1.0f }, __GridLineColor());
+            __TextBold(title, x, y, 20, __TextColor());
+            DrawRectangleRec({ x, y + __S(29.0f), cw, 1.0f }, __GridColor());
             y += __S(42.0f);
             };
 
         section("MAP");
-        if (__Button({ x, y, bw, __S(34) }, "Random")) __GenerateRandomMap();
-        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Terrain")) __GenerateTerrainMap();
+        if (__Button({ x, y, bw, __S(34) }, "Random")) __GenRandom();
+        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Terrain")) __GenTerrain();
         y += __S(40);
-        if (__Button({ x, y, bw, __S(34) }, "Maze")) __GenerateMazeMap();
+        if (__Button({ x, y, bw, __S(34) }, "Maze")) __GenMaze();
         if (__Button({ x + bw + gap, y, bw, __S(34) }, "Clear")) {
-            __PushUndoState("Clear map");
+            __PushUndo("Clear map");
             __map.ClearAll();
-            __ResetVisualization();
-            __statusMessage = "Map cleared";
+            __ResetVis();
+            __status = "Map cleared";
         }
         y += __S(40);
-        if (__Button({ x, y, bw, __S(34) }, "City preset")) __GenerateCityPreset();
-        if (__Button({ x + bw + gap, y, bw, __S(34) }, "River preset")) __GenerateRiverPreset();
+        if (__Button({ x, y, bw, __S(34) }, "City preset")) __GenCity();
+        if (__Button({ x + bw + gap, y, bw, __S(34) }, "River preset")) __GenRiver();
         y += __S(40);
-        if (__Button({ x, y, bw, __S(34) }, "Mountain pass")) __GenerateMountainPreset();
-        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Demo A*")) __RunDemoMode();
+        if (__Button({ x, y, bw, __S(34) }, "Mountain pass")) __GenMountain();
+        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Demo A*")) __RunDemo();
         y += __S(40);
-        __Slider({ x, y, contentW, __S(24) }, "Rows", &__mapRowsValue, 10.0f, 80.0f, true);
+        __Slider({ x, y, cw, __S(24) }, "Rows", &__rowVal, 10.0f, 80.0f, true);
         y += __S(38);
-        __Slider({ x, y, contentW, __S(24) }, "Columns", &__mapColsValue, 10.0f, 120.0f, true);
+        __Slider({ x, y, cw, __S(24) }, "Columns", &__colVal, 10.0f, 120.0f, true);
         y += __S(38);
-        __Slider({ x, y, contentW, __S(24) }, "Obstacle", &__obstacleProbability, 0.0f, 0.65f);
+        __Slider({ x, y, cw, __S(24) }, "Obstacle", &__obsProb, 0.0f, 0.65f);
         y += __S(40);
-        if (__Button({ x, y, contentW, __S(34) }, "Apply map size")) __ApplyMapSize();
+        if (__Button({ x, y, cw, __S(34) }, "Apply map size")) __ApplyMapSize();
         y += __S(46);
 
         section("ALGORITHMS");
-        if (__Button({ x, y, bw, __S(34) }, "BFS")) __RunAlgorithm(AlgorithmKind::BFS);
-        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Dijkstra")) __RunAlgorithm(AlgorithmKind::Dijkstra);
+        if (__Button({ x, y, bw, __S(34) }, "BFS")) __RunAlg(AlgKind::BFS);
+        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Dijkstra")) __RunAlg(AlgKind::Dijkstra);
         y += __S(40);
-        if (__Button({ x, y, bw, __S(34) }, "A*")) __RunAlgorithm(AlgorithmKind::AStar);
-        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Weighted A*")) __RunAlgorithm(AlgorithmKind::WeightedAStar);
+        if (__Button({ x, y, bw, __S(34) }, "A*")) __RunAlg(AlgKind::AStar);
+        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Weighted A*")) __RunAlg(AlgKind::WAStar);
         y += __S(40);
-        if (__Button({ x, y, bw, __S(34) }, "Greedy")) __RunAlgorithm(AlgorithmKind::GreedyBestFirst);
-        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Benchmark")) __RunBenchmark();
+        if (__Button({ x, y, bw, __S(34) }, "Greedy")) __RunAlg(AlgKind::Greedy);
+        if (__Button({ x + bw + gap, y, bw, __S(34) }, "Benchmark")) __RunBench();
         y += __S(40);
-        if (__ToggleButton({ x, y, contentW, __S(34) }, __showAgentComparison ? "Agent paths: ON" : "Agent paths: OFF", __showAgentComparison)) {
-            if (!__showAgentComparison) __CompareAgents();
-            else { __showAgentComparison = false; __agentComparisonRows.clear(); __statusMessage = "Agent comparison hidden"; }
+        if (__TogBtn({ x, y, cw, __S(34) }, __showAgents ? "Agent paths: ON" : "Agent paths: OFF", __showAgents)) {
+            if (!__showAgents) __CmpAgents();
+            else { __showAgents = false; __agentRows.clear(); __status = "Agent comparison hidden"; }
         }
         y += __S(46);
 
         section("AGENT & COST");
-        if (__ToggleButton({ x, y, contentW, __S(34) }, __options.allowDiagonal ? "Diagonal movement: ON" : "Diagonal movement: OFF", __options.allowDiagonal)) {
-            __options.allowDiagonal = !__options.allowDiagonal;
-            __statusMessage = __options.allowDiagonal ? "Diagonal movement enabled" : "Diagonal movement disabled";
+        if (__TogBtn({ x, y, cw, __S(34) }, __opt.diag ? "Diagonal movement: ON" : "Diagonal movement: OFF", __opt.diag)) {
+            __opt.diag = !__opt.diag;
+            __status = __opt.diag ? "Diagonal movement enabled" : "Diagonal movement disabled";
         }
         y += __S(40);
-        if (__ToggleButton({ x, y, bw, __S(34) }, "Pedestrian", __movementProfile == MovementProfile::Pedestrian)) __movementProfile = MovementProfile::Pedestrian;
-        if (__ToggleButton({ x + bw + gap, y, bw, __S(34) }, "Car", __movementProfile == MovementProfile::Car)) __movementProfile = MovementProfile::Car;
+        if (__TogBtn({ x, y, bw, __S(34) }, "Pedestrian", __prof == MoveProfile::Pedestrian)) __prof = MoveProfile::Pedestrian;
+        if (__TogBtn({ x + bw + gap, y, bw, __S(34) }, "Car", __prof == MoveProfile::Car)) __prof = MoveProfile::Car;
         y += __S(40);
-        if (__ToggleButton({ x, y, bw, __S(34) }, "Offroad", __movementProfile == MovementProfile::Offroad)) __movementProfile = MovementProfile::Offroad;
-        if (__ToggleButton({ x + bw + gap, y, bw, __S(34) }, "Drone", __movementProfile == MovementProfile::Drone)) __movementProfile = MovementProfile::Drone;
+        if (__TogBtn({ x, y, bw, __S(34) }, "Offroad", __prof == MoveProfile::Offroad)) __prof = MoveProfile::Offroad;
+        if (__TogBtn({ x + bw + gap, y, bw, __S(34) }, "Drone", __prof == MoveProfile::Drone)) __prof = MoveProfile::Drone;
         y += __S(38);
-        __Slider({ x, y, contentW, __S(24) }, "Heuristic", &__heuristicWeightValue, 1.0f, 5.0f);
+        __Slider({ x, y, cw, __S(24) }, "Heuristic", &__heurVal, 1.0f, 5.0f);
         y += __S(36);
-        __Slider({ x, y, contentW, __S(24) }, "Terrain cost", &__terrainWeightValue, 0.0f, 5.0f);
+        __Slider({ x, y, cw, __S(24) }, "Terrain cost", &__terrVal, 0.0f, 5.0f);
         y += __S(36);
-        __Slider({ x, y, contentW, __S(24) }, "Height cost", &__heightWeightValue, 0.0f, 2.0f);
+        __Slider({ x, y, cw, __S(24) }, "Height cost", &__hgtVal, 0.0f, 2.0f);
         y += __S(40);
 
         section("VIEW");
-        __Slider({ x, y, contentW, __S(24) }, "2D zoom", &__mapZoom2D, 0.55f, 5.0f);
+        __Slider({ x, y, cw, __S(24) }, "2D zoom", &__zoom2D, 0.55f, 5.0f);
         y += __S(36);
-        __Slider({ x, y, contentW, __S(24) }, "3D height", &__terrainHeightScale, 0.08f, 0.90f);
+        __Slider({ x, y, cw, __S(24) }, "3D height", &__hgtScale, 0.08f, 0.90f);
         y += __S(40);
-        if (__ToggleButton({ x, y, bw, __S(34) }, __smoothTerrain3D ? "Style: diorama" : "Style: editor", __smoothTerrain3D)) {
-            __smoothTerrain3D = !__smoothTerrain3D;
-            if (__view3D) __ResetCamera3D();
-            __statusMessage = __smoothTerrain3D ? "Diorama mode: presentation sandbox view" : "Editor mode: precise solid-grid editing";
+        if (__TogBtn({ x, y, bw, __S(34) }, __smooth3D ? "Style: diorama" : "Style: editor", __smooth3D)) {
+            __smooth3D = !__smooth3D;
+            if (__is3D) __ResetCam();
+            __status = __smooth3D ? "Diorama mode: presentation sandbox view" : "Editor mode: precise solid-grid editing";
         }
-        if (__ToggleButton({ x + bw + gap, y, bw, __S(34) }, __smoothPath ? "Path: curve" : "Path: polyline", __smoothPath)) __smoothPath = !__smoothPath;
+        if (__TogBtn({ x + bw + gap, y, bw, __S(34) }, __smoothPath ? "Path: curve" : "Path: polyline", __smoothPath)) __smoothPath = !__smoothPath;
         y += __S(40);
-        if (__ToggleButton({ x, y, contentW, __S(34) }, __showGraphOverlay ? "__Algorithm graph: ON" : "__Algorithm graph: OFF", __showGraphOverlay)) __showGraphOverlay = !__showGraphOverlay;
+        if (__TogBtn({ x, y, cw, __S(34) }, __showGraph ? "Algorithm graph: ON" : "Algorithm graph: OFF", __showGraph)) __showGraph = !__showGraph;
         EndScissorMode();
     }
 
-    void App::__DrawRightPanel() {
-        DrawRectangleRec(__rightPanel, __PanelColor());
-        DrawRectangleLinesEx(__rightPanel, 1.0f, __GridLineColor());
-        BeginScissorMode(static_cast<int>(__rightPanel.x), static_cast<int>(__rightPanel.y), static_cast<int>(__rightPanel.width), static_cast<int>(__rightPanel.height));
+    // Draw editing tools, playback controls, out buttons and statistics.
+    void App::__DrawRight() {
+        DrawRectangleRec(__rPanel, __PanelColor());
+        DrawRectangleLinesEx(__rPanel, 1.0f, __GridColor());
+        BeginScissorMode(static_cast<int>(__rPanel.x), static_cast<int>(__rPanel.y), static_cast<int>(__rPanel.width), static_cast<int>(__rPanel.height));
 
-        float       x           = __rightPanel.x + __S(22.0f);
-        float       y           = __rightPanel.y + __S(18.0f) + __rightPanelScroll;
-        const float contentW    = __rightPanel.width - __S(40.0f);
-        const float gap         = __S(8.0f);
-        const float bw          = (contentW - gap * 2.0f) / 3.0f;
-        const float halfW       = (contentW - gap) * 0.5f;
-        const float gh          = __S(34.0f);
+        float       x     = __rPanel.x + __S(22.0f);
+        float       y     = __rPanel.y + __S(18.0f) + __rScroll;
+        const float cw    = __rPanel.width - __S(40.0f);
+        const float gap   = __S(8.0f);
+        const float bw    = (cw - gap * 2.0f) / 3.0f;
+        const float halfW = (cw - gap) * 0.5f;
+        const float gh    = __S(34.0f);
 
         auto section = [&](const char* title) {
-            __DrawTextUIBold(title, x, y, 20, __TextColor());
-            DrawRectangleRec({ x, y + __S(29.0f), contentW, 1.0f }, __GridLineColor());
+            __TextBold(title, x, y, 20, __TextColor());
+            DrawRectangleRec({ x, y + __S(29.0f), cw, 1.0f }, __GridColor());
             y += __S(42.0f);
             };
 
         section("TOOLS");
-        auto tool = [&](EditMode mode, const char* label, int col, int row) {
-            if (__ToggleButton({ x + col * (bw + gap), y + row * (gh + gap), bw, gh }, label, __editMode == mode)) {
-                __editMode = mode;
+        auto tool = [&](Edit mode, const char* label, int col, int row) {
+            if (__TogBtn({ x + col * (bw + gap), y + row * (gh + gap), bw, gh }, label, __edit == mode)) {
+                __edit = mode;
             }
             };
-        tool(EditMode::Select,      "Select",   0, 0);
-        tool(EditMode::Wall,        "Wall",     1, 0);
-        tool(EditMode::Erase,       "Erase",    2, 0);
-        tool(EditMode::Start,       "Start",    0, 1);
-        tool(EditMode::Goal,        "Goal",     1, 1);
-        tool(EditMode::Road,        "Road",     2, 1);
-        tool(EditMode::Forest,      "Forest",   0, 2);
-        tool(EditMode::Mountain,    "Mountain", 1, 2);
-        tool(EditMode::Water,       "Water",    2, 2);
-        tool(EditMode::Plain,       "Plain",    0, 3);
-        tool(EditMode::Raise,       "Height+",  1, 3);
-        tool(EditMode::Lower,       "Height-",  2, 3);
+        // 0, 1, 2, 3 means different position 
+        tool(Edit::Select,      "Select",   0, 0);
+        tool(Edit::Wall,        "Wall",     1, 0);
+        tool(Edit::Erase,       "Erase",    2, 0);
+        tool(Edit::Start,       "Start",    0, 1);
+        tool(Edit::Goal,        "Goal",     1, 1);
+        tool(Edit::Road,        "Road",     2, 1);
+        tool(Edit::Forest,      "Forest",   0, 2);
+        tool(Edit::Mountain,    "Mountain", 1, 2);
+        tool(Edit::Water,       "Water",    2, 2);
+        tool(Edit::Plain,       "Plain",    0, 3);
+        tool(Edit::Raise,       "Height+",  1, 3);
+        tool(Edit::Lower,       "Height-",  2, 3);
         y += 4 * (gh + gap) + __S(12);
         if (__Button({ x, y, halfW, gh }, "Undo")) __UndoEdit();
         if (__Button({ x + halfW + gap, y, halfW, gh }, "Redo")) __RedoEdit();
         y += __S(42);
 
-        __DrawTextUI("Mode: " + __EditModeName(), x, y, 14, __MutedTextColor());
+        __Text("Mode: " + __EditName(), x, y, 14, __MutedColor());
         y += __S(24);
-        __DrawTextUI(__CellInfo(__selectedCell), x, y, 14, __selectedCell >= 0 ? __TextColor() : __MutedTextColor());
+        __Text(__CellInfo(__selCell), x, y, 14, __selCell >= 0 ? __TextColor() : __MutedColor());
         y += __S(38);
 
         section("PLAYBACK");
-        if (__Button({ x, y, bw, gh }, __playing ? "Pause" : "Play")) {
-            if (__hasResult) __playing = !__playing;
+        if (__Button({ x, y, bw, gh }, __play ? "Pause" : "Play")) {
+            if (__hasRes) __play = !__play;
         }
         if (__Button({ x + bw + gap, y, bw, gh }, "Reset")) {
-            __frameIndex    = 0;
-            __playing       = false;
+            __frmIdx    = 0;
+            __play       = false;
         }
         if (__Button({ x + (bw + gap) * 2.0f, y, bw, gh }, "End")) {
-            if (__FrameCount() > 0) __frameIndex = __FrameCount() - 1;
-            __playing = false;
+            if (__FrameCnt() > 0) __frmIdx = __FrameCnt() - 1;
+            __play = false;
         }
         y += __S(40);
         if (__Button({ x, y, bw, gh }, "Prev")) {
-            __frameIndex = std::max(0, __frameIndex - 1);
-            __playing = false;
+            __frmIdx = std::max(0, __frmIdx - 1);
+            __play = false;
         }
         if (__Button({ x + bw + gap, y, bw, gh }, "Next")) {
-            __frameIndex = std::min(__FrameCount() - 1, __frameIndex + 1);
-            __playing = false;
+            __frmIdx = std::min(__FrameCnt() - 1, __frmIdx + 1);
+            __play = false;
         }
         if (__Button({ x + (bw + gap) * 2.0f, y, bw, gh }, "Replay")) {
-            if (__hasResult) {
-                __frameIndex    = 0;
-                __playing       = true;
+            if (__hasRes) {
+                __frmIdx    = 0;
+                __play       = true;
             }
         }
         y += __S(40);
-        __Slider({ x, y, contentW, __S(24) }, "Speed", &__animationSpeed, 1.0f, 160.0f, true);
+        __Slider({ x, y, cw, __S(24) }, "Speed", &__animSpd, 1.0f, 160.0f, true);
         y += __S(46);
 
         section("OUTPUT");
-        if (__Button({ x, y, halfW, gh }, "Save as...")) __SaveCurrentMap();
-        if (__Button({ x + halfW + gap, y, halfW, gh }, "Open...")) __LoadCurrentMap();
+        if (__Button({ x, y, halfW, gh }, "Save as...")) __SaveMap();
+        if (__Button({ x + halfW + gap, y, halfW, gh }, "Open...")) __LoadMap();
         y += __S(40);
-        if (__Button({ x, y, halfW, gh }, "Screenshot")) __ExportScreenshot();
-        if (__Button({ x + halfW + gap, y, halfW, gh }, "CSV")) __ExportBenchmarkCsv();
+        if (__Button({ x, y, halfW, gh }, "Screenshot")) __ExportPng();
+        if (__Button({ x + halfW + gap, y, halfW, gh }, "CSV")) __ExportCsv();
         y += __S(38);
-        __DrawTextUI("Map file: " + CompactDisplayPath(__currentMapPath), x, y, 14, __MutedTextColor());
+        __Text("Map file: " + CompactPath(__curMapPath), x, y, 14, __MutedColor());
         y += __S(34);
 
         section("LEGEND");
-        __DrawLegend(x, y, contentW);
+        __DrawLegend(x, y, cw);
         y += __S(10);
 
         section("STATS");
-        std::string algorithm = __hasResult ? __result.algorithmName : "None";
-        __DrawTextUI("__Algorithm: " + algorithm, x, y, 14, __TextColor());
+        std::string alg = __hasRes ? __result.algName : "None";
+        __Text("__Algorithm: " + alg, x, y, 14, __TextColor());
         y += __S(24);
-        __DrawTextUI("Agent: " + __MovementProfileName(), x, y, 14, __TextColor());
+        __Text("Agent: " + __ProfName(), x, y, 14, __TextColor());
         y += __S(24);
-        __DrawTextUI("Frame: " + std::to_string(__FrameCount() == 0 ? 0 : __frameIndex + 1) + " / " + std::to_string(__FrameCount()), x, y, 14, __TextColor());
+        __Text("Frame: " + std::to_string(__FrameCnt() == 0 ? 0 : __frmIdx + 1) + " / " + std::to_string(__FrameCnt()), x, y, 14, __TextColor());
         y += __S(24);
 
-        if (__hasResult) {
-            __DrawTextUI("Found: " + std::string(__result.found ? "Yes" : "No") + " | Cost: " + FormatDouble(__result.pathLength, 2), x, y, 14, __result.found ? __SuccessColor() : __DangerColor());
+        if (__hasRes) {
+            __Text("Found: " + std::string(__result.found ? "Yes" : "No") + " | Cost: " + FormatDouble(__result.pathLen, 2), x, y, 14, __result.found ? __SuccessColor() : __DangerColor());
             y += __S(24);
-            __DrawTextUI("Expanded: " + std::to_string(__result.expandedNodes) + " | Generated: " + std::to_string(__result.generatedNodes), x, y, 14, __TextColor());
+            __Text("Expanded: " + std::to_string(__result.expNodes) + " | Generated: " + std::to_string(__result.genNodes), x, y, 14, __TextColor());
             y += __S(24);
-            __DrawTextUI("Time: " + FormatDouble(__result.elapsedMs, 3) + " ms", x, y, 14, __TextColor());
+            __Text("Time: " + FormatDouble(__result.timeMs, 3) + " ms", x, y, 14, __TextColor());
             y += __S(23);
         }
         else {
-            __DrawTextUI("Run an algorithm to see data.", x, y, 14, __MutedTextColor());
+            __Text("Run an alg to see data.", x, y, 14, __MutedColor());
             y += __S(26);
         }
 
-        const SearchFrame* frame = __CurrentFrame();
-        if (frame != nullptr) {
-            __DrawTextUI("Open: " + std::to_string(frame->open.size()) + " | Closed: " + std::to_string(frame->closed.size()) + " | Current: " + std::to_string(frame->current), x, y, 14, __TextColor());
+        const SearchFrm* frm = __CurFrame();
+        if (frm != nullptr) {
+            __Text("Open: " + std::to_string(frm->open.size()) + " | Closed: " + std::to_string(frm->closed.size()) + " | Current: " + std::to_string(frm->cur), x, y, 14, __TextColor());
             y += __S(28);
         }
 
-        if (__showAgentComparison && !__agentComparisonRows.empty()) {
-            __DrawTextUI("AGENT PATHS", x, y, 16, __TextColor());
+        if (__showAgents && !__agentRows.empty()) {
+            __Text("AGENT PATHS", x, y, 16, __TextColor());
             y += __S(24);
-            for (const auto& row : __agentComparisonRows) {
-                Color c = ProfileColor(row.profile, __themeMode);
+            for (const auto& row : __agentRows) {
+                Color c = ProfileColor(row.prof, __theme);
                 DrawRectangleRec({ x, y + __S(4), __S(11), __S(11) }, c);
-                __DrawTextUI(row.profileName + (row.found ? (" | " + FormatDouble(row.pathLength, 1)) : " | no path"), x + __S(18), y, 13, row.found ? __TextColor() : __DangerColor());
+                __Text(row.profName + (row.found ? (" | " + FormatDouble(row.pathLen, 1)) : " | no path"), x + __S(18), y, 13, row.found ? __TextColor() : __DangerColor());
                 y += __S(20);
             }
             y += __S(8);
         }
 
-        __DrawTextUI("BENCHMARK", x, y, 16, __TextColor());
+        __Text("BENCHMARK", x, y, 16, __TextColor());
         y += __S(24);
-        if (__benchmarkRows.empty()) {
-            __DrawTextUI("Click Benchmark to compare algorithms.", x, y, 13, __MutedTextColor());
+        if (__benchRows.empty()) {
+            __Text("Click Benchmark to compare algorithms.", x, y, 13, __MutedColor());
         }
         else {
-            __DrawTextUI("__Algorithm        Cost    Expanded   Time", x, y, 12, __MutedTextColor());
+            __Text("Algorithm        Cost    Expanded   Time", x, y, 12, __MutedColor());
             y += __S(18);
-            for (const auto& row : __benchmarkRows) {
+            for (const auto& row : __benchRows) {
                 char buffer[256];
-                std::snprintf(buffer, sizeof(buffer), "%-13s %7.2f %8d %7.3f", row.algorithmName.c_str(), row.pathLength, row.expandedNodes, row.elapsedMs);
-                __DrawTextUI(buffer, x, y, 12, row.found ? __TextColor() : __DangerColor());
+                std::snprintf(buffer, sizeof(buffer), "%-13s %7.2f %8d %7.3f", row.algName.c_str(), row.pathLen, row.expNodes, row.timeMs);
+                __Text(buffer, x, y, 12, row.found ? __TextColor() : __DangerColor());
                 y += __S(17);
             }
         }
         EndScissorMode();
     }
 
-    void App::__DrawLegend(float x, float& y, float contentW) {
-        struct LegendItem { TerrainType terrain; const char* name; const char* rule; };
+    // Draw terrain legend and cur agent movement rule
+    void App::__DrawLegend(float x, float& y, float cw) {
+        struct LegendItem { Terrain terrain; const char* name; const char* rule; };
         const LegendItem items[] = {
-            { TerrainType::Plain,       "Plain",    "normal" },
-            { TerrainType::Road,        "Road",     "fast" },
-            { TerrainType::Forest,      "Forest",   "slow" },
-            { TerrainType::Mountain,    "Mountain", "steep" },
-            { TerrainType::Water,       "Water",    "blocked" }
+            { Terrain::Plain,       "Plain",    "normal" },
+            { Terrain::Road,        "Road",     "fast" },
+            { Terrain::Forest,      "Forest",   "slow" },
+            { Terrain::Mountain,    "Mountain", "steep" },
+            { Terrain::Water,       "Water",    "blocked" }
         };
         const float sw = __S(13.0f);
         for (const auto& item : items) {
-            Color color = __TerrainVisualColor(item.terrain, 0.45f, false);
+            Color color = __TerrainColor(item.terrain, 0.45f, false);
             DrawRectangleRounded({ x, y + __S(3), sw, sw }, 0.18f, 6, color);
-            DrawRectangleRoundedLines({ x, y + __S(3), sw, sw }, 0.18f, 6, 1.0f, __GridLineColor());
-            __DrawTextUIBold(item.name, x + __S(20), y, 13, __TextColor());
-            __DrawTextUI(item.rule, x + contentW - __S(96), y, 13, __MutedTextColor());
+            DrawRectangleRoundedLines({ x, y + __S(3), sw, sw }, 0.18f, 6, 1.0f, __GridColor());
+            __TextBold(item.name, x + __S(20), y, 13, __TextColor());
+            __Text(item.rule, x + cw - __S(96), y, 13, __MutedColor());
             y += __S(20);
         }
         y += __S(4);
-        __DrawTextUI("Agent rules: " + __MovementProfileName(), x, y, 13, __MutedTextColor());
+        __Text("Agent rules: " + __ProfName(), x, y, 13, __MutedColor());
         y += __S(20);
         std::string rule;
-        switch (__movementProfile) {
-        case MovementProfile::Pedestrian: rule = "walks most terrain; water blocked"; break;
-        case MovementProfile::Car: rule = "prefers roads; rough terrain costly"; break;
-        case MovementProfile::Offroad: rule = "handles forest/mountain better"; break;
-        case MovementProfile::Drone: rule = "nearly direct; terrain mostly ignored"; break;
-        default: rule = "custom movement profile"; break;
+        switch (__prof) {
+        case MoveProfile::Pedestrian:   rule = "walks most terrain; water blocked"; break;
+        case MoveProfile::Car:          rule = "prefers roads; rough terrain costly"; break;
+        case MoveProfile::Offroad:      rule = "handles forest/mountain better"; break;
+        case MoveProfile::Drone:        rule = "nearly direct; terrain mostly ignored"; break;
+        default:                        rule = "custom movement prof"; break;
         }
-        __DrawTextUI(rule, x, y, 13, __MutedTextColor());
+        __Text(rule, x, y, 13, __MutedColor());
         y += __S(24);
     }
 
-    void App::__DrawBottomPanel() {
-        DrawRectangleRec(__bottomPanel, __DarkPanelColor());
-        DrawRectangleLinesEx(__bottomPanel, 1.0f, __GridLineColor());
+    // Draw animation timeline and status/help text
+    void App::__DrawBottom() {
+        DrawRectangleRec(__bPanel, __PanelDeep());
+        DrawRectangleLinesEx(__bPanel, 1.0f, __GridColor());
 
-        float x             = __leftPanel.width + __S(24.0f);
-        float y             = __bottomPanel.y   + __S(15.0f);
-        float rightLimit    = __rightPanel.x    - __S(24.0f);
-        __DrawTextUI("Timeline", __S(20), y, 20, __TextColor());
+        float x          = __lPanel.width + __S(24.0f);
+        float y          = __bPanel.y     + __S(15.0f);
+        float rightLimit = __rPanel.x     - __S(24.0f);
+        __Text("Timeline", __S(20), y, 20, __TextColor());
 
-        Rectangle bar{ x, __bottomPanel.y + __S(22), std::max(__S(160.0f), rightLimit - x), __S(10) };
-        DrawRectangleRounded(bar, 0.4f, 8, __themeMode == ThemeMode::Dark ? ColorSet::ControlTrackDark : ColorSet::ControlTrackLight);
+        Rectangle bar{ x, __bPanel.y + __S(22), std::max(__S(160.0f), rightLimit - x), __S(10) };
+        DrawRectangleRounded(bar, 0.4f, 8, __theme == Theme::Dark ? Pal::TrackD : Pal::TrackL);
 
         float t = 0.0f;
-        if (__FrameCount() > 1) {
-            t = static_cast<float>(__frameIndex) / static_cast<float>(__FrameCount() - 1);
+        if (__FrameCnt() > 1) {
+            t = static_cast<float>(__frmIdx) / static_cast<float>(__FrameCnt() - 1);
         }
         Rectangle progress = bar;
         progress.width *= t;
         DrawRectangleRounded(progress, 0.4f, 8, __AccentColor());
 
         float knobX = bar.x + bar.width * t;
-        DrawCircle(static_cast<int>(knobX), static_cast<int>(bar.y + bar.height / 2.0f), 8.0f, __themeMode == ThemeMode::Dark ? ColorSet::OverlayDark : ColorSet::OverlayLight);
+        DrawCircle(static_cast<int>(knobX), static_cast<int>(bar.y + bar.height / 2.0f), 8.0f, __theme == Theme::Dark ? Pal::OverlayD : Pal::OverlayL);
 
-        if (CheckCollisionPointRec(GetMousePosition(), { bar.x - 8, bar.y - 14, bar.width + 16, bar.height + 28 }) && IsMouseButtonDown(MOUSE_LEFT_BUTTON) && __FrameCount() > 1) {
+        if (CheckCollisionPointRec(GetMousePosition(), { bar.x - 8, bar.y - 14, bar.width + 16, bar.height + 28 }) && IsMouseButtonDown(MOUSE_LEFT_BUTTON) && __FrameCnt() > 1) {
             float ratio = (GetMouseX() - bar.x) / bar.width;
-            ratio           = std::clamp(ratio, 0.0f, 1.0f);
-            __frameIndex    = static_cast<int>(ratio * static_cast<float>(__FrameCount() - 1));
-            __playing       = false;
+            ratio       = std::clamp(ratio, 0.0f, 1.0f);
+            __frmIdx    = static_cast<int>(ratio * static_cast<float>(__FrameCnt() - 1));
+            __play      = false;
         }
 
-        std::string info = __hasResult
-            ? (__result.algorithmName + " | step " + std::to_string(__frameIndex + 1) + " / " + std::to_string(__FrameCount()))
-            : "Generate a map, choose a tool, then run an algorithm.";
-        __DrawTextUI(info, x, __bottomPanel.y + __S(47.0f), 14, __MutedTextColor());
-        __DrawTextUI("Status: " + __statusMessage, __S(20), __bottomPanel.y + __S(55.0f), 14, __MutedTextColor());
+        std::string info = __hasRes
+            ? (__result.algName + " | step " + std::to_string(__frmIdx + 1) + " / " + std::to_string(__FrameCnt()))
+            : "Generate a map, choose a tool, then run an alg.";
+        __Text(info, x, __bPanel.y + __S(47.0f), 14, __MutedColor());
+        __Text("Status: " + __status, __S(20), __bPanel.y + __S(55.0f), 14, __MutedColor());
 
-        const char* help = __view3D
+        const char* help = __is3D
             ? "3D: left select/edit | right/middle rotate | wheel zoom | WASD pan | R reset"
             : "2D: wheel zoom | middle drag pan | left paint | right erase | Shift start | Ctrl goal";
-        float helpW = __MeasureTextUI(help, 13);
-        __DrawTextUI(help, static_cast<float>(GetScreenWidth()) - helpW - __S(20.0f), __bottomPanel.y + __S(55.0f), 13, __MutedTextColor());
+        float helpW = __MeasureText(help, 13);
+        __Text(help, static_cast<float>(GetScreenWidth()) - helpW - __S(20.0f), __bPanel.y + __S(55.0f), 13, __MutedColor());
     }
 
-    void App::__DrawMapCanvas() {
+    // Draw the 2D grid map, cur alg frm and path
+    void App::__DrawMap() {
         DrawRectangleRec(__canvas, __CanvasColor());
-        DrawRectangleLinesEx(__canvas, 1.0f, __GridLineColor());
+        DrawRectangleLinesEx(__canvas, 1.0f, __GridColor());
 
         const float padding = __S(28.0f);
         const float usableW = __canvas.width - 2.0f * padding;
         const float usableH = __canvas.height - 2.0f * padding;
         const float baseCellSize = std::floor(std::min(usableW / static_cast<float>(__map.Cols()), usableH / static_cast<float>(__map.Rows())));
-        const float cellSize = std::max(3.0f, baseCellSize * __mapZoom2D);
+        const float cellSize = std::max(3.0f, baseCellSize * __zoom2D);
         if (cellSize <= 0.0f) return;
 
         const float gridW = cellSize * static_cast<float>(__map.Cols());
         const float gridH = cellSize * static_cast<float>(__map.Rows());
-        const float startX = __canvas.x + (__canvas.width - gridW) / 2.0f + __mapPan2D.x;
-        const float startY = __canvas.y + (__canvas.height - gridH) / 2.0f + __mapPan2D.y;
+        const float startX = __canvas.x + (__canvas.width - gridW) / 2.0f + __pan2D.x;
+        const float startY = __canvas.y + (__canvas.height - gridH) / 2.0f + __pan2D.y;
 
-        const SearchFrame* frame = __CurrentFrame();
+        const SearchFrm* frm = __CurFrame();
 
         BeginScissorMode(static_cast<int>(__canvas.x), static_cast<int>(__canvas.y), static_cast<int>(__canvas.width), static_cast<int>(__canvas.height));
         for (int r = 0; r < __map.Rows(); ++r) {
@@ -1061,157 +1164,163 @@ namespace pathlab {
                 int idx = __map.Index(r, c);
                 Rectangle rect{ startX + static_cast<float>(c) * cellSize, startY + static_cast<float>(r) * cellSize, cellSize, cellSize };
                 if (rect.x + rect.width < __canvas.x || rect.y + rect.height < __canvas.y || rect.x > __canvas.x + __canvas.width || rect.y > __canvas.y + __canvas.height) continue;
-                DrawRectangleRec(rect, __CellColor(idx, frame));
-                if (cellSize >= 8.0f) DrawRectangleLinesEx(rect, 1.0f, __GridLineColor());
+                DrawRectangleRec(rect, __CellColor(idx, frm));
+                if (cellSize >= 8.0f) DrawRectangleLinesEx(rect, 1.0f, __GridColor());
 
                 const Cell& cell = __map.GetCell(idx);
                 if (cellSize >= 24.0f && !__map.IsObstacle(idx)) {
                     const std::string label = std::to_string(cell.height);
-                    const float labelSize = std::clamp((cellSize * 0.34f) / __uiScale, 13.0f, 26.0f);
-                    const float tw = __MeasureTextUI(label, labelSize);
-                    __DrawTextUIBold(label, rect.x + (cellSize - tw) * 0.5f, rect.y + cellSize * 0.32f, labelSize, __MutedTextColor());
+                    const float labelSize = std::clamp((cellSize * 0.34f) / __scale, 13.0f, 26.0f);
+                    const float tw = __MeasureText(label, labelSize);
+                    __TextBold(label, rect.x + (cellSize - tw) * 0.5f, rect.y + cellSize * 0.32f, labelSize, __MutedColor());
                 }
             }
         }
 
-        if (frame != nullptr && frame->path.size() >= 2) {
+        if (frm != nullptr && frm->path.size() >= 2) {
             auto centerOf = [&](int idx) {
-                GridCoord gc = __map.Coord(idx);
+                GPos gc = __map.Coord(idx);
                 return Vector2{ startX + (static_cast<float>(gc.col) + 0.5f) * cellSize,
                                 startY + (static_cast<float>(gc.row) + 0.5f) * cellSize };
                 };
             std::vector<Vector2> points;
-            points.reserve(frame->path.size());
-            for (int cell : frame->path) points.push_back(centerOf(cell));
+            points.reserve(frm->path.size());
+            for (int cell : frm->path) points.push_back(centerOf(cell));
 
             const float width = std::max(3.0f, cellSize * 0.16f);
-            const Color core = __themeMode == ThemeMode::Dark ? ColorSet::Path2DCoreDark : ColorSet::Path2DCoreLight;
-            const Color outline = __themeMode == ThemeMode::Dark ? ColorSet::Path2DOutlineDark : ColorSet::Path2DOutlineLight;
-            if (__smoothPath && frame->path.size() >= 3) {
-                points = RoundedPolyline2D(points, std::clamp(cellSize * 0.46f, 7.0f, 28.0f), 10);
+            const Color core = __theme == Theme::Dark ? Pal::Path2CoreD : Pal::Path2CoreL;
+            const Color outline = __theme == Theme::Dark ? Pal::Path2OutD : Pal::Path2OutL;
+            if (__smoothPath && frm->path.size() >= 3) {
+                points = RoundLine2(points, std::clamp(cellSize * 0.46f, 7.0f, 28.0f), 10);
             }
-            DrawPathLine2D(points, width, outline, core);
+            DrawPath2D(points, width, outline, core);
         }
 
-        __DrawAgentComparison2D(startX, startY, cellSize);
+        __DrawAgent2D(startX, startY, cellSize);
 
-        const int hovered = __MouseToCell(GetMousePosition());
+        const int hovered = __MouseCell(GetMousePosition());
         if (hovered >= 0) {
-            GridCoord hc = __map.Coord(hovered);
+            GPos hc = __map.Coord(hovered);
             Rectangle rect{ startX + static_cast<float>(hc.col) * cellSize, startY + static_cast<float>(hc.row) * cellSize, cellSize, cellSize };
             DrawRectangleLinesEx(rect, 2.5f, __OverlayColor());
         }
         EndScissorMode();
 
-        const int hoverCell = __MouseToCell(GetMousePosition());
+        const int hoverCell = __MouseCell(GetMousePosition());
         if (hoverCell >= 0) {
-            GridCoord hc = __map.Coord(hoverCell);
+            GPos hc = __map.Coord(hoverCell);
             const Cell& cell = __map.GetCell(hoverCell);
             std::string tip = "cell " + std::to_string(hc.row) + "," + std::to_string(hc.col)
                 + " | " + TerrainName(cell.terrain) + " | h=" + std::to_string(cell.height)
-                + " | zoom=" + FormatDouble(__mapZoom2D, 2) + "x";
-            __DrawTextUI(tip, __canvas.x + __S(22.0f), __canvas.y + __S(22.0f), 17, __TextColor());
+                + " | zoom=" + FormatDouble(__zoom2D, 2) + "x";
+            __Text(tip, __canvas.x + __S(22.0f), __canvas.y + __S(22.0f), 17, __TextColor());
         }
         else {
-            __DrawTextUI("2D map editor | wheel zoom, middle drag pan", __canvas.x + __S(22.0f), __canvas.y + __S(22.0f), 18, __TextColor());
+            __Text("2D map editor | wheel zoom, middle drag pan", __canvas.x + __S(22.0f), __canvas.y + __S(22.0f), 18, __TextColor());
         }
     }
 
-    void App::__DrawAgentComparison2D(float startX, float startY, float cellSize) const {
-        if (!__showAgentComparison || __agentComparisonRows.empty()) return;
+    // Draw all agent comparison paths in 2D
+    void App::__DrawAgent2D(float startX, float startY, float cellSize) const {
+        if (!__showAgents || __agentRows.empty()) return;
         auto centerOf = [&](int idx) {
-            GridCoord gc = __map.Coord(idx);
+            GPos gc = __map.Coord(idx);
             return Vector2{ startX + (static_cast<float>(gc.col) + 0.5f) * cellSize,
                             startY + (static_cast<float>(gc.row) + 0.5f) * cellSize };
             };
         const float width = std::max(2.5f, cellSize * 0.10f);
-        const Color outline = __themeMode == ThemeMode::Dark ? ColorSet::Agent2DOutlineDark : ColorSet::Agent2DOutlineLight;
-        for (const auto& row : __agentComparisonRows) {
+        const Color outline = __theme == Theme::Dark ? Pal::Agent2OutD : Pal::Agent2OutL;
+        for (const auto& row : __agentRows) {
             if (!row.found || row.path.size() < 2) continue;
             std::vector<Vector2> points;
             points.reserve(row.path.size());
             for (int cell : row.path) points.push_back(centerOf(cell));
-            if (__smoothPath && points.size() >= 3) points = RoundedPolyline2D(points, std::clamp(cellSize * 0.40f, 6.0f, 24.0f), 8);
-            DrawPathLine2D(points, width, outline, ProfileColor(row.profile, __themeMode));
+            if (__smoothPath && points.size() >= 3) points = RoundLine2(points, std::clamp(cellSize * 0.40f, 6.0f, 24.0f), 8);
+            DrawPath2D(points, width, outline, ProfileColor(row.prof, __theme));
         }
     }
 
-    void App::__DrawAgentComparison3D() const {
-        if (!__showAgentComparison || __agentComparisonRows.empty()) return;
-        for (const auto& row : __agentComparisonRows) {
+    // Draw all agent comparison paths in 3D
+    void App::__DrawAgent3D() const {
+        if (!__showAgents || __agentRows.empty()) return;
+        for (const auto& row : __agentRows) {
             if (!row.found || row.path.size() < 2) continue;
-            __DrawPath3DColored(row.path, ProfileColor(row.profile, __themeMode), 0.046f);
+            __DrawPath3DC(row.path, ProfileColor(row.prof, __theme), 0.046f);
         }
     }
 
-    void App::__DrawTerrain3D() {
+    // Draw the full 3D scene
+    // order matters, or the scene becomes abstract
+    // AWFUL 3D!
+    void App::__Draw3D() {
         BeginScissorMode(static_cast<int>(__canvas.x), static_cast<int>(__canvas.y), static_cast<int>(__canvas.width), static_cast<int>(__canvas.height));
-        __DrawGradientBackground(__canvas);
+        __DrawGradBg(__canvas);
 
         BeginMode3D(__camera);
 
         const float worldW = static_cast<float>(__map.Cols());
         const float worldH = static_cast<float>(__map.Rows());
-        Color floorColor = __themeMode == ThemeMode::Dark ? ColorSet::TerrainFloorDark : ColorSet::TerrainFloorLight;
+        Color floorColor = __theme == Theme::Dark ? Pal::FloorD : Pal::FloorL;
         DrawPlane({ 0.0f, -0.035f, 0.0f }, { worldW + 3.0f, worldH + 3.0f }, floorColor);
 
-        const SearchFrame* frame = __CurrentFrame();
-        if (__smoothTerrain3D) {
-            __DrawSmoothTerrain3D(frame);
+        const SearchFrm* frm = __CurFrame();
+        if (__smooth3D) {
+            __DrawSmooth3D(frm);
         }
         else {
-            __DrawBlockTerrain3D(frame);
+            __DrawBlock3D(frm);
         }
 
-        if (!__smoothTerrain3D && __map.Count() <= 9000) {
+        if (!__smooth3D && __map.Count() <= 9000) {
             for (int idx = 0; idx < __map.Count(); ++idx) {
-                __DrawTerrainFeature3D(idx);
+                __DrawFeat3D(idx);
             }
         }
 
-        if (__showGraphOverlay) {
-            __DrawGraphOverlay3D();
+        if (__showGraph) {
+            __DrawGraph3D();
         }
 
-        if (frame != nullptr && frame->path.size() >= 2) {
-            __DrawPath3D(frame->path);
+        if (frm != nullptr && frm->path.size() >= 2) {
+            __DrawPath3D(frm->path);
         }
-        __DrawAgentComparison3D();
+        __DrawAgent3D();
 
-        DrawSphere(__CellWorldPosition(__map.Start(), 0.65f), 0.32f, __SuccessColor());
-        DrawSphere(__CellWorldPosition(__map.Goal(), 0.65f), 0.32f, __DangerColor());
+        DrawSphere(__CellPos(__map.Start(), 0.65f), 0.32f, __SuccessColor());
+        DrawSphere(__CellPos(__map.Goal(), 0.65f), 0.32f, __DangerColor());
 
-        if (frame != nullptr && frame->current >= 0) {
-            DrawSphere(__CellWorldPosition(frame->current, 0.92f), 0.26f, __AccentColor());
-        }
-
-        if (__selectedCell >= 0) {
-            __DrawCellSelection3D(__selectedCell, __AccentColor());
-        }
-        if (__hoveredCell3D >= 0 && __hoveredCell3D != __selectedCell) {
-            __DrawCellSelection3D(__hoveredCell3D, __OverlayColor());
+        if (frm != nullptr && frm->cur >= 0) {
+            DrawSphere(__CellPos(frm->cur, 0.92f), 0.26f, __AccentColor());
         }
 
-        if (!__smoothTerrain3D) {
+        if (__selCell >= 0) {
+            __DrawSel3D(__selCell, __AccentColor());
+        }
+        if (__hov3D >= 0 && __hov3D != __selCell) {
+            __DrawSel3D(__hov3D, __OverlayColor());
+        }
+
+        if (!__smooth3D) {
             DrawGrid(std::max(__map.Rows(), __map.Cols()) + 4, 1.0f);
         }
         EndMode3D();
         EndScissorMode();
 
-        DrawRectangleLinesEx(__canvas, 1.0f, __GridLineColor());
-        __DrawTextUI(__smoothTerrain3D ? "3D diorama presentation" : "3D editor mode", __canvas.x + __S(22.0f), __canvas.y + __S(22.0f), 19, __TextColor());
-        __DrawTextUI(__smoothTerrain3D ? "Diorama hides the dense grid and turns the map into a clean terrain sandbox." : "Editor mode keeps every cell visible for precise editing and picking.", __canvas.x + __S(22.0f), __canvas.y + __S(49.0f), 14, __MutedTextColor());
-        __DrawTextUI("Agent: " + __MovementProfileName() + " | " + std::string(__showGraphOverlay ? "graph overlay ON" : "graph overlay OFF"), __canvas.x + __S(22.0f), __canvas.y + __S(75.0f), 15, __MutedTextColor());
+        DrawRectangleLinesEx(__canvas, 1.0f, __GridColor());
+        __Text(__smooth3D ? "3D diorama presentation" : "3D editor mode", __canvas.x + __S(22.0f), __canvas.y + __S(22.0f), 19, __TextColor());
+        __Text(__smooth3D ? "Diorama hides the dense grid and turns the map into a clean terrain sandbox." : "Editor mode keeps every cell visible for precise editing and picking.", __canvas.x + __S(22.0f), __canvas.y + __S(49.0f), 14, __MutedColor());
+        __Text("Agent: " + __ProfName() + " | " + std::string(__showGraph ? "graph overlay ON" : "graph overlay OFF"), __canvas.x + __S(22.0f), __canvas.y + __S(75.0f), 15, __MutedColor());
 
-        if (__hoveredCell3D >= 0) {
-            __DrawTextUI("Hover: " + __CellInfo(__hoveredCell3D), __canvas.x + __S(22.0f), __canvas.y + __S(101.0f), 15, __TextColor());
+        if (__hov3D >= 0) {
+            __Text("Hover: " + __CellInfo(__hov3D), __canvas.x + __S(22.0f), __canvas.y + __S(101.0f), 15, __TextColor());
         }
-        if (__selectedCell >= 0) {
-            __DrawTextUI("Selected: " + __CellInfo(__selectedCell), __canvas.x + __S(22.0f), __canvas.y + __S(126.0f), 15, __AccentColor());
+        if (__selCell >= 0) {
+            __Text("Selected: " + __CellInfo(__selCell), __canvas.x + __S(22.0f), __canvas.y + __S(126.0f), 15, __AccentColor());
         }
     }
 
-    void App::__DrawBlockTerrain3D(const SearchFrame* frame) const {
+    // Draw the precise cell-block terrain for editor mode
+    void App::__DrawBlock3D(const SearchFrm* frm) const {
         const float cellScale = 1.0f;
         for (int r = 0; r < __map.Rows(); ++r) {
             for (int c = 0; c < __map.Cols(); ++c) {
@@ -1219,95 +1328,96 @@ namespace pathlab {
                 const Cell& cell    = __map.GetCell(idx);
                 const bool blocked  = __map.IsObstacle(idx) || __map.IsWater(idx);
 
-                const float h       = __CellSurfaceHeight(idx);
-                Vector3 center      = __CellWorldPosition(idx, 0.0f);
+                const float h       = __CellHgt(idx);
+                Vector3 center      = __CellPos(idx, 0.0f);
                 center.y            = h * 0.5f;
                 Vector3 size{ cellScale * 0.92f, h, cellScale * 0.92f };
 
-                Color color = __CellColor(idx, frame);
-                if (cell.terrain == TerrainType::Water) color = Blend(color, __themeMode == ThemeMode::Dark ? ColorSet::BlockWaterTintDark : ColorSet::BlockWaterTintLight, 0.25f);
-                DrawShadedCubeV(center, size, color);
+                Color color = __CellColor(idx, frm);
+                if (cell.terrain == Terrain::Water) color = Blend(color, __theme == Theme::Dark ? Pal::BlockWaterD : Pal::BlockWaterL, 0.25f);
+                DrawCubeShade(center, size, color);
 
                 if (blocked || idx == __map.Start() || idx == __map.Goal()) {
-                    DrawCubeWiresV(center, size, __themeMode == ThemeMode::Dark ? ColorSet::BlockWireDark : ColorSet::BlockWireLight);
+                    DrawCubeWiresV(center, size, __theme == Theme::Dark ? Pal::BlockWireD : Pal::BlockWireL);
                 }
             }
         }
     }
 
-    void App::__DrawSmoothTerrain3D(const SearchFrame* frame) const {
+    // Draw the cleaner diorama terrain
+    void App::__DrawSmooth3D(const SearchFrm* frm) const {
 
-        const float worldW      = static_cast<float>(__map.Cols());
-        const float worldH      = static_cast<float>(__map.Rows());
-        const Color baseTop     = __themeMode == ThemeMode::Dark ? ColorSet::DioramaBaseTopDark : ColorSet::DioramaBaseTopLight;
-        const Color baseSide    = __themeMode == ThemeMode::Dark ? ColorSet::DioramaBaseSideDark : ColorSet::DioramaBaseSideLight;
-        const Color boardTrim   = __themeMode == ThemeMode::Dark ? ColorSet::DioramaBoardTrimDark : ColorSet::DioramaBoardTrimLight;
+        const float worldW    = static_cast<float>(__map.Cols());
+        const float worldH    = static_cast<float>(__map.Rows());
+        const Color baseTop   = __theme == Theme::Dark ? Pal::DioBaseTopD : Pal::DioBaseTopL;
+        const Color baseSide  = __theme == Theme::Dark ? Pal::DioBaseSideD : Pal::DioBaseSideL;
+        const Color boardTrim = __theme == Theme::Dark ? Pal::DioTrimD : Pal::DioTrimL;
 
-        DrawShadedCubeV({ 0.0f, -0.18f, 0.0f }, { worldW + 1.2f, 0.30f, worldH + 1.2f }, baseSide);
-        DrawFlatShadedCubeV({ 0.0f, 0.015f, 0.0f }, { worldW + 0.95f, 0.035f, worldH + 0.95f }, baseTop);
+        DrawCubeShade({ 0.0f, -0.18f, 0.0f }, { worldW + 1.2f, 0.30f, worldH + 1.2f }, baseSide);
+        DrawCubeFlat({ 0.0f, 0.015f, 0.0f }, { worldW + 0.95f, 0.035f, worldH + 0.95f }, baseTop);
         DrawCubeWiresV({ 0.0f, 0.015f, 0.0f }, { worldW + 0.95f, 0.040f, worldH + 0.95f }, boardTrim);
 
         auto pFor = [&](int idx, float lift = 0.06f) {
-            return __CellWorldPosition(idx, lift);
+            return __CellPos(idx, lift);
             };
 
         auto isFrameCell = [&](int idx, const std::vector<int>& list) {
-            return frame != nullptr && __ContainsCell(list, idx);
+            return frm != nullptr && __HasCell(list, idx);
             };
 
         auto overlayFor = [&](int idx) -> Color {
-            if (frame == nullptr)                   return ColorSet::Transparent;
-            if (__ContainsCell(frame->path, idx))   return __themeMode == ThemeMode::Dark ? ColorSet::DioramaPathDark : ColorSet::DioramaPathLight;
-            if (frame->current == idx)              return __themeMode == ThemeMode::Dark ? ColorSet::DioramaCurrentDark : ColorSet::DioramaCurrentLight;
-            if (__ContainsCell(frame->open, idx))   return __themeMode == ThemeMode::Dark ? ColorSet::DioramaOpenDark : ColorSet::DioramaOpenLight;
-            if (__ContainsCell(frame->closed, idx)) return __themeMode == ThemeMode::Dark ? ColorSet::DioramaClosedDark : ColorSet::DioramaClosedLight;
-            return ColorSet::Transparent;
+            if (frm == nullptr)              return Pal::Transparent;
+            if (__HasCell(frm->path, idx))   return __theme == Theme::Dark ? Pal::DioPathD : Pal::DioPathL;
+            if (frm->cur == idx)             return __theme == Theme::Dark ? Pal::DioCurD : Pal::DioCurL;
+            if (__HasCell(frm->open, idx))   return __theme == Theme::Dark ? Pal::DioOpenD : Pal::DioOpenL;
+            if (__HasCell(frm->closed, idx)) return __theme == Theme::Dark ? Pal::DioClosedD : Pal::DioClosedL;
+            return Pal::Transparent;
             };
 
         for (int idx = 0; idx < __map.Count(); ++idx) {
             const Cell& cell = __map.GetCell(idx);
             Vector3 p = pFor(idx, 0.052f);
 
-            if (cell.terrain == TerrainType::Water) {
-                Color water = __themeMode == ThemeMode::Dark ? ColorSet::DioramaWaterDark : ColorSet::DioramaWaterLight;
-                DrawFlatShadedCubeV({ p.x, 0.075f, p.z }, { 0.96f, 0.030f, 0.96f }, water);
+            if (cell.terrain == Terrain::Water) {
+                Color water = __theme == Theme::Dark ? Pal::DioWaterD : Pal::DioWaterL;
+                DrawCubeFlat({ p.x, 0.075f, p.z }, { 0.96f, 0.030f, 0.96f }, water);
                 continue;
             }
 
-            if (cell.terrain == TerrainType::Road) {
-                Color road = __themeMode == ThemeMode::Dark ? ColorSet::DioramaRoadDark : ColorSet::DioramaRoadLight;
-                Color stripe = __themeMode == ThemeMode::Dark ? ColorSet::DioramaRoadStripeDark : ColorSet::DioramaRoadStripeLight;
-                DrawFlatShadedCubeV({ p.x, 0.125f, p.z }, { 0.94f, 0.045f, 0.94f }, road);
+            if (cell.terrain == Terrain::Road) {
+                Color road = __theme == Theme::Dark ? Pal::DioRoadD : Pal::DioRoadL;
+                Color stripe = __theme == Theme::Dark ? Pal::DioStripeD : Pal::DioStripeL;
+                DrawCubeFlat({ p.x, 0.125f, p.z }, { 0.94f, 0.045f, 0.94f }, road);
 
-                GridCoord g = __map.Coord(idx);
+                GPos g = __map.Coord(idx);
                 bool horizontal = false;
                 bool vertical = false;
-                if (g.col > 0 && __map.GetCell(__map.Index(g.row, g.col - 1)).terrain == TerrainType::Road)                 horizontal = true;
-                if (g.col + 1 < __map.Cols() && __map.GetCell(__map.Index(g.row, g.col + 1)).terrain == TerrainType::Road)  horizontal = true;
-                if (g.row > 0 && __map.GetCell(__map.Index(g.row - 1, g.col)).terrain == TerrainType::Road)                 vertical = true;
-                if (g.row + 1 < __map.Rows() && __map.GetCell(__map.Index(g.row + 1, g.col)).terrain == TerrainType::Road)  vertical = true;
-                if      (horizontal && !vertical)   DrawFlatShadedCubeV({ p.x, 0.154f, p.z }, { 0.52f, 0.012f, 0.055f }, stripe);
-                else if (vertical && !horizontal)   DrawFlatShadedCubeV({ p.x, 0.154f, p.z }, { 0.055f, 0.012f, 0.52f }, stripe);
-                else                                DrawFlatShadedCubeV({ p.x, 0.154f, p.z }, { 0.20f, 0.012f, 0.20f }, stripe);
+                if (g.col > 0 && __map.GetCell(__map.Index(g.row, g.col - 1)).terrain == Terrain::Road)                 horizontal = true;
+                if (g.col + 1 < __map.Cols() && __map.GetCell(__map.Index(g.row, g.col + 1)).terrain == Terrain::Road)  horizontal = true;
+                if (g.row > 0 && __map.GetCell(__map.Index(g.row - 1, g.col)).terrain == Terrain::Road)                 vertical = true;
+                if (g.row + 1 < __map.Rows() && __map.GetCell(__map.Index(g.row + 1, g.col)).terrain == Terrain::Road)  vertical = true;
+                if      (horizontal && !vertical)   DrawCubeFlat({ p.x, 0.154f, p.z }, { 0.52f, 0.012f, 0.055f }, stripe);
+                else if (vertical && !horizontal)   DrawCubeFlat({ p.x, 0.154f, p.z }, { 0.055f, 0.012f, 0.52f }, stripe);
+                else                                DrawCubeFlat({ p.x, 0.154f, p.z }, { 0.20f, 0.012f, 0.20f }, stripe);
                 continue;
             }
 
-            if (cell.terrain == TerrainType::Forest) {
-                GridCoord g = __map.Coord(idx);
+            if (cell.terrain == Terrain::Forest) {
+                GPos g = __map.Coord(idx);
                 if (((idx * 31 + g.row * 17 + g.col * 13) % 11) == 0) {
-                    Color trunk     = __themeMode == ThemeMode::Dark ? ColorSet::DioramaTrunkDark  : ColorSet::DioramaTrunkLight;
-                    Color canopy    = __themeMode == ThemeMode::Dark ? ColorSet::DioramaCanopyDark : ColorSet::DioramaCanopyLight;
+                    Color trunk  = __theme == Theme::Dark ? Pal::DioTrunkD  : Pal::DioTrunkL;
+                    Color canopy = __theme == Theme::Dark ? Pal::DioCanopyD : Pal::DioCanopyL;
                     DrawCylinder({ p.x, 0.205f, p.z }, 0.045f, 0.045f, 0.23f, 7, trunk);
                     DrawCylinder({ p.x, 0.435f, p.z }, 0.02f, 0.21f, 0.38f, 8, canopy);
                 }
                 continue;
             }
 
-            if (cell.terrain == TerrainType::Mountain) {
-                GridCoord g = __map.Coord(idx);
+            if (cell.terrain == Terrain::Mountain) {
+                GPos g = __map.Coord(idx);
                 if (((idx * 23 + g.row * 11 + g.col * 19) % 13) == 0) {
-                    Color rock  = __themeMode == ThemeMode::Dark ? ColorSet::DioramaRockDark : ColorSet::DioramaRockLight;
-                    Color cap   = __themeMode == ThemeMode::Dark ? ColorSet::DioramaSnowDark : ColorSet::DioramaSnowLight;
+                    Color rock  = __theme == Theme::Dark ? Pal::DioRockD : Pal::DioRockL;
+                    Color cap   = __theme == Theme::Dark ? Pal::DioSnowD : Pal::DioSnowL;
                     float rockH = 0.42f + static_cast<float>(cell.height) * 0.035f;
                     DrawCylinder({ p.x, 0.18f + rockH * 0.50f, p.z }, 0.28f, 0.04f, rockH, 6, rock);
                     DrawSphere({ p.x + 0.08f, 0.18f + rockH * 0.80f, p.z - 0.07f }, 0.09f, cap);
@@ -1318,79 +1428,85 @@ namespace pathlab {
 
         for (int idx = 0; idx < __map.Count(); ++idx) {
             if (!__map.IsObstacle(idx) || __map.IsWater(idx)) continue;
-            const Cell& cell        = __map.GetCell(idx);
-            GridCoord   g           = __map.Coord(idx);
-            Vector3     p           = pFor(idx, 0.0f);
-            float       h           = 0.58f + 0.055f * static_cast<float>((cell.height + g.row + g.col) % 5);
-            Color       building    = __themeMode == ThemeMode::Dark ? ColorSet::DioramaBuildingDark : ColorSet::DioramaBuildingLight;
-            Color       roof        = __themeMode == ThemeMode::Dark ? ColorSet::DioramaRoofDark     : ColorSet::DioramaRoofLight;
-            DrawShadedCubeV({ p.x, h * 0.5f + 0.08f, p.z }, { 0.70f, h, 0.70f }, building);
-            DrawFlatShadedCubeV({ p.x, h + 0.106f, p.z }, { 0.74f, 0.035f, 0.74f }, roof);
+            const Cell& cell     = __map.GetCell(idx);
+            GPos        g        = __map.Coord(idx);
+            Vector3     p        = pFor(idx, 0.0f);
+            float       h        = 0.58f + 0.055f * static_cast<float>((cell.height + g.row + g.col) % 5);
+            Color       building = __theme == Theme::Dark ? Pal::DioBuildD : Pal::DioBuildL;
+            Color       roof     = __theme == Theme::Dark ? Pal::DioRoofD  : Pal::DioRoofL;
+            DrawCubeShade({ p.x, h * 0.5f + 0.08f, p.z }, { 0.70f, h, 0.70f }, building);
+            DrawCubeFlat({ p.x, h + 0.106f, p.z }, { 0.74f, 0.035f, 0.74f }, roof);
         }
 
-        if (frame != nullptr) {
+        if (frm != nullptr) {
             const int stride = std::max(1, __map.Count() / 2400);
             for (int idx = 0; idx < __map.Count(); idx += stride) {
                 Color ov = overlayFor(idx);
                 if (ov.a == 0) continue;
                 Vector3 p = pFor(idx, 0.16f);
-                DrawFlatShadedCubeV({ p.x, p.y, p.z }, { 0.82f, 0.026f, 0.82f }, ov);
+                DrawCubeFlat({ p.x, p.y, p.z }, { 0.82f, 0.026f, 0.82f }, ov);
             }
         }
     }
 
+    // Draw the active final path in 3D using the default path color
     void App::__DrawPath3D(const std::vector<int>& path) const {
-        const Color core = __themeMode == ThemeMode::Dark ? ColorSet::Path3DCoreDark : ColorSet::Path3DCoreLight;
-        __DrawPath3DColored(path, core, 0.065f);
+        const Color core = __theme == Theme::Dark ? Pal::Path3CoreD : Pal::Path3CoreL;
+        __DrawPath3DC(path, core, 0.065f);
     }
 
-    void App::__DrawPath3DColored(const std::vector<int>& path, Color core, float radius) const {
+    // Draw one 3D path with a chosen color
+    // used by normal path and agent comparison
+    void App::__DrawPath3DC(const std::vector<int>& path, Color core, float radius) const {
         if (path.size() < 2) return;
 
         std::vector<Vector3> points;
         points.reserve(path.size());
-        for (int cell : path) points.push_back(__CellWorldPosition(cell, 0.66f));
+        for (int cell : path) points.push_back(__CellPos(cell, 0.66f));
 
         if (__smoothPath && path.size() >= 3) {
-            points = RoundedPolyline3D(points, 0.46f, 10);
+            points = RoundLine3(points, 0.46f, 10);
         }
 
-        const Color outline = __themeMode == ThemeMode::Dark ? ColorSet::Path3DOutlineDark : ColorSet::Path3DOutlineLight;
-        DrawPathTube3D(points, radius, outline, core);
+        const Color outline = __theme == Theme::Dark ? Pal::Path3OutD : Pal::Path3OutL;
+        DrawTube3D(points, radius, outline, core);
     }
 
-    void App::__DrawGraphOverlay3D() const {
+    // Draw a sparse graph overlay
+    // so the search space is visible but not too noisy
+    void App::__DrawGraph3D() const {
         const int stride = std::max(1, std::max(__map.Rows(), __map.Cols()) / 45);
-        Color edgeColor = __themeMode == ThemeMode::Dark ? ColorSet::GraphEdgeDark : ColorSet::GraphEdgeLight;
-        Color nodeColor = __themeMode == ThemeMode::Dark ? ColorSet::GraphNodeDark : ColorSet::GraphNodeLight;
+        Color edgeColor = __theme == Theme::Dark ? Pal::GraphEdgeD : Pal::GraphEdgeL;
+        Color nodeColor = __theme == Theme::Dark ? Pal::GraphNodeD : Pal::GraphNodeL;
         for (int r = 0; r < __map.Rows(); r += stride) {
             for (int c = 0; c < __map.Cols(); c += stride) {
                 int idx = __map.Index(r, c);
-                if (!__map.IsWalkable(idx, __movementProfile)) continue;
-                Vector3 p = __CellWorldPosition(idx, 0.10f);
+                if (!__map.IsWalkable(idx, __prof)) continue;
+                Vector3 p = __CellPos(idx, 0.10f);
                 DrawSphere(p, 0.045f, nodeColor);
                 if (c + stride < __map.Cols()) {
                     int right = __map.Index(r, c + stride);
-                    if (__map.IsWalkable(right, __movementProfile)) DrawLine3D(p, __CellWorldPosition(right, 0.10f), edgeColor);
+                    if (__map.IsWalkable(right, __prof)) DrawLine3D(p, __CellPos(right, 0.10f), edgeColor);
                 }
                 if (r + stride < __map.Rows()) {
                     int down = __map.Index(r + stride, c);
-                    if (__map.IsWalkable(down, __movementProfile)) DrawLine3D(p, __CellWorldPosition(down, 0.10f), edgeColor);
+                    if (__map.IsWalkable(down, __prof)) DrawLine3D(p, __CellPos(down, 0.10f), edgeColor);
                 }
             }
         }
     }
 
-    void App::__DrawCellSelection3D(int cell, Color color) const {
+    // Draw a floating outline above one selected or hovered 3D cell
+    void App::__DrawSel3D(int cell, Color color) const {
         if (cell < 0 || cell >= __map.Count()) return;
-        BoundingBox box = __CellBoundingBox3D(cell);
+        BoundingBox box = __CellBox3D(cell);
         const float lift = 0.035f;
         box.min.x -= 0.035f;
         box.min.z -= 0.035f;
         box.max.x += 0.035f;
         box.max.z += 0.035f;
-        box.min.y = box.max.y + lift;
-        box.max.y = box.min.y + 0.045f;
+        box.min.y =  box.max.y + lift;
+        box.max.y =  box.min.y + 0.045f;
         Vector3 center{
             (box.min.x + box.max.x) * 0.5f,
             (box.min.y + box.max.y) * 0.5f,
@@ -1402,214 +1518,226 @@ namespace pathlab {
             box.max.z - box.min.z
         };
         DrawCubeWiresV(center, size, color);
-        DrawFlatShadedCubeV(center, { size.x, 0.012f, size.z }, WithAlpha(color, ColorSet::SelectionFillAlpha));
+        DrawCubeFlat(center, { size.x, 0.012f, size.z }, WithAlpha(color, Pal::SelFillA));
     }
 
-    void App::__DrawTerrainFeature3D(int cell) const {
+    // Draw small road/tree/rock/water details on block terrain
+    // yeah that's very cute~ >3<
+    // please look at [NOI 2016] The lemon tree in the moonlight
+    void App::__DrawFeat3D(int cell) const {
         if (cell < 0 || cell >= __map.Count()) return;
         const Cell& c = __map.GetCell(cell);
-        if (__map.IsObstacle(cell) && c.terrain != TerrainType::Water) return;
+        if (__map.IsObstacle(cell) && c.terrain != Terrain::Water) return;
 
-        GridCoord gc = __map.Coord(cell);
+        GPos gc = __map.Coord(cell);
         const int featureHash = (gc.row * 73856093) ^ (gc.col * 19349663);
-        if (c.terrain == TerrainType::Forest    && (std::abs(featureHash) % (__smoothTerrain3D ? 11 : 7)) != 0) return;
-        if (c.terrain == TerrainType::Mountain  && (std::abs(featureHash) % (__smoothTerrain3D ? 13 : 8)) != 0) return;
-        if (c.terrain == TerrainType::Road      && (std::abs(featureHash) % (__smoothTerrain3D ? 6 : 3))  != 0) return;
+        if (c.terrain == Terrain::Forest    && (std::abs(featureHash) % (__smooth3D ? 11 : 7)) != 0) return;
+        if (c.terrain == Terrain::Mountain  && (std::abs(featureHash) % (__smooth3D ? 13 : 8)) != 0) return;
+        if (c.terrain == Terrain::Road      && (std::abs(featureHash) % (__smooth3D ? 6 : 3))  != 0) return;
 
-        Vector3 p = __CellWorldPosition(cell, 0.02f);
+        Vector3 p = __CellPos(cell, 0.02f);
 
         switch (c.terrain) {
-        case TerrainType::Road: {
-            Color slab      = __themeMode == ThemeMode::Dark ? ColorSet::FeatureRoadSlabDark   : ColorSet::FeatureRoadSlabLight;
-            Color stripe    = __themeMode == ThemeMode::Dark ? ColorSet::FeatureRoadStripeDark : ColorSet::FeatureRoadStripeLight;
-            DrawFlatShadedCubeV({ p.x, p.y + 0.010f, p.z }, { 0.62f, 0.028f, 0.62f },  slab);
-            DrawFlatShadedCubeV({ p.x, p.y + 0.026f, p.z }, { 0.065f, 0.014f, 0.46f }, stripe);
+        case Terrain::Road: {
+            Color slab      = __theme == Theme::Dark ? Pal::FeatRoadD   : Pal::FeatRoadL;
+            Color stripe    = __theme == Theme::Dark ? Pal::FeatStripeD : Pal::FeatStripeL;
+            DrawCubeFlat({ p.x, p.y + 0.010f, p.z }, { 0.62f, 0.028f, 0.62f },  slab);
+            DrawCubeFlat({ p.x, p.y + 0.026f, p.z }, { 0.065f, 0.014f, 0.46f }, stripe);
             break;
         }
-        case TerrainType::Forest: {
-            Color trunk     = __themeMode == ThemeMode::Dark ? ColorSet::FeatureTrunkDark  : ColorSet::FeatureTrunkLight;
-            Color canopy    = __themeMode == ThemeMode::Dark ? ColorSet::FeatureCanopyDark : ColorSet::FeatureCanopyLight;
+        case Terrain::Forest: {
+            Color trunk     = __theme == Theme::Dark ? Pal::FeatTrunkD  : Pal::FeatTrunkL;
+            Color canopy    = __theme == Theme::Dark ? Pal::FeatCanopyD : Pal::FeatCanopyL;
             DrawCylinder({ p.x, p.y + 0.085f, p.z }, 0.045f, 0.045f, 0.18f, 7, trunk);
             DrawCylinder({ p.x, p.y + 0.30f, p.z }, 0.0f, 0.18f, 0.34f, 8, canopy);
             break;
         }
-        case TerrainType::Mountain: {
-            Color peak  = __themeMode == ThemeMode::Dark ? ColorSet::FeaturePeakDark  : ColorSet::FeaturePeakLight;
-            Color stone = __themeMode == ThemeMode::Dark ? ColorSet::FeatureStoneDark : ColorSet::FeatureStoneLight;
+        case Terrain::Mountain: {
+            Color peak  = __theme == Theme::Dark ? Pal::FeatPeakD  : Pal::FeatPeakL;
+            Color stone = __theme == Theme::Dark ? Pal::FeatStoneD : Pal::FeatStoneL;
             DrawCylinder({ p.x, p.y + 0.18f, p.z }, 0.0f, 0.23f, 0.38f, 6, peak);
             DrawSphere({ p.x + 0.08f, p.y + 0.12f, p.z - 0.08f }, 0.075f, stone);
             break;
         }
-        case TerrainType::Water: {
-            Color water = __themeMode == ThemeMode::Dark ? ColorSet::FeatureWaterDark : ColorSet::FeatureWaterLight;
-            DrawFlatShadedCubeV({ p.x, p.y + 0.028f, p.z }, { 0.82f, 0.045f, 0.82f }, water);
+        case Terrain::Water: {
+            Color water = __theme == Theme::Dark ? Pal::FeatWaterD : Pal::FeatWaterL;
+            DrawCubeFlat({ p.x, p.y + 0.028f, p.z }, { 0.82f, 0.045f, 0.82f }, water);
             break;
         }
-        case TerrainType::Plain:
+        case Terrain::Plain:
         default:
             break;
         }
     }
 
-    void App::__HandleMapEditing() {
+    // Convert mouse actions into map edits
+    // this is where most editing bugs like to hide
+    // FUCK YOU!
+    void App::__HandleEdit() {
         Vector2 mouse = GetMousePosition();
 
-        if (__view3D) {
-            __hoveredCell3D = CheckCollisionPointRec(mouse, __canvas) ? __PickCell3D(mouse) : -1;
-            if (__hoveredCell3D < 0) return;
+        if (__is3D) {
+            __hov3D = CheckCollisionPointRec(mouse, __canvas) ? __Pick3D(mouse) : -1;
+            if (__hov3D < 0) return;
 
             if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
-                __selectedCell = __hoveredCell3D;
+                __selCell = __hov3D;
                 if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
-                    if (__lastEditedCell != __hoveredCell3D) __PushUndoState("Set start");
-                    __lastEditedCell = __hoveredCell3D;
-                    __map.SetStart(__hoveredCell3D);
-                    __ResetVisualization();
+                    if (__lastCell != __hov3D) __PushUndo("Set start");
+                    __lastCell = __hov3D;
+                    __map.SetStart(__hov3D);
+                    __ResetVis();
                     return;
                 }
                 if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
-                    if (__lastEditedCell != __hoveredCell3D) __PushUndoState("Set goal");
-                    __lastEditedCell = __hoveredCell3D;
-                    __map.SetGoal(__hoveredCell3D);
-                    __ResetVisualization();
+                    if (__lastCell != __hov3D) __PushUndo("Set goal");
+                    __lastCell = __hov3D;
+                    __map.SetGoal(__hov3D);
+                    __ResetVis();
                     return;
                 }
-                if (__lastEditedCell != __hoveredCell3D) {
-                    __PushUndoState("Edit cell");
-                    __lastEditedCell = __hoveredCell3D;
-                    __ApplyEditToCell(__hoveredCell3D);
+                if (__lastCell != __hov3D) {
+                    __PushUndo("Edit cell");
+                    __lastCell = __hov3D;
+                    __EditCell(__hov3D);
                 }
             }
             return;
         }
 
-        __hoveredCell3D = -1;
+        __hov3D = -1;
         if (!CheckCollisionPointRec(mouse, __canvas)) return;
 
-        int cell = __MouseToCell(mouse);
+        int cell = __MouseCell(mouse);
         if (cell < 0) return;
 
         if (IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
-            __selectedCell = cell;
+            __selCell = cell;
             if (IsKeyDown(KEY_LEFT_SHIFT) || IsKeyDown(KEY_RIGHT_SHIFT)) {
-                if (__lastEditedCell != cell) __PushUndoState("Set start");
-                __lastEditedCell = cell;
+                if (__lastCell != cell) __PushUndo("Set start");
+                __lastCell = cell;
                 __map.SetStart(cell);
-                __ResetVisualization();
+                __ResetVis();
                 return;
             }
             if (IsKeyDown(KEY_LEFT_CONTROL) || IsKeyDown(KEY_RIGHT_CONTROL)) {
-                if (__lastEditedCell != cell) __PushUndoState("Set goal");
-                __lastEditedCell = cell;
+                if (__lastCell != cell) __PushUndo("Set goal");
+                __lastCell = cell;
                 __map.SetGoal(cell);
-                __ResetVisualization();
+                __ResetVis();
                 return;
             }
-            if (__lastEditedCell != cell) {
-                __PushUndoState("Edit cell");
-                __lastEditedCell = cell;
-                __ApplyEditToCell(cell);
+            if (__lastCell != cell) {
+                __PushUndo("Edit cell");
+                __lastCell = cell;
+                __EditCell(cell);
             }
         }
 
         if (IsMouseButtonDown(MOUSE_RIGHT_BUTTON)) {
-            __selectedCell = cell;
-            if (__lastEditedCell != cell) {
-                __PushUndoState("Erase cell");
-                __lastEditedCell = cell;
+            __selCell = cell;
+            if (__lastCell != cell) {
+                __PushUndo("Erase cell");
+                __lastCell = cell;
                 __map.SetObstacle(cell, false);
-                if (__map.GetCell(cell).terrain == TerrainType::Water) __map.SetTerrain(cell, TerrainType::Plain);
-                __ResetVisualization();
+                if (__map.GetCell(cell).terrain == Terrain::Water) __map.SetTerrain(cell, Terrain::Plain);
+                __ResetVis();
             }
         }
     }
 
-    void App::__ApplyEditToCell(int cell) {
+    // Apply the cur edit tool to one cell
+    void App::__EditCell(int cell) {
         if (cell < 0 || cell >= __map.Count()) return;
 
-        switch (__editMode) {
-        case EditMode::Select:
-            __statusMessage = "Selected " + __CellInfo(cell);
+        switch (__edit) {
+        case Edit::Select:
+            __status = "Selected " + __CellInfo(cell);
             return;
-        case EditMode::Wall:
+        case Edit::Wall:
             __map.SetObstacle(cell, true);
             break;
-        case EditMode::Erase:
+        case Edit::Erase:
             __map.SetObstacle(cell, false);
-            if (__map.GetCell(cell).terrain == TerrainType::Water) __map.SetTerrain(cell, TerrainType::Plain);
+            if (__map.GetCell(cell).terrain == Terrain::Water) __map.SetTerrain(cell, Terrain::Plain);
             break;
-        case EditMode::Start:
+        case Edit::Start:
             __map.SetStart(cell);
             break;
-        case EditMode::Goal:
+        case Edit::Goal:
             __map.SetGoal(cell);
             break;
-        case EditMode::Raise:
+        case Edit::Raise:
             __map.AddHeight(cell, 1);
             break;
-        case EditMode::Lower:
+        case Edit::Lower:
             __map.AddHeight(cell, -1);
             break;
-        case EditMode::Plain:
+        case Edit::Plain:
             __map.SetObstacle(cell, false);
-            __map.SetTerrain(cell, TerrainType::Plain);
+            __map.SetTerrain(cell, Terrain::Plain);
             break;
-        case EditMode::Road:
+        case Edit::Road:
             __map.SetObstacle(cell, false);
-            __map.SetTerrain(cell, TerrainType::Road);
+            __map.SetTerrain(cell, Terrain::Road);
             break;
-        case EditMode::Forest:
+        case Edit::Forest:
             __map.SetObstacle(cell, false);
-            __map.SetTerrain(cell, TerrainType::Forest);
+            __map.SetTerrain(cell, Terrain::Forest);
             break;
-        case EditMode::Mountain:
+        case Edit::Mountain:
             __map.SetObstacle(cell, false);
-            __map.SetTerrain(cell, TerrainType::Mountain);
+            __map.SetTerrain(cell, Terrain::Mountain);
             break;
-        case EditMode::Water:
+        case Edit::Water:
             __map.SetObstacle(cell, false);
-            __map.SetTerrain(cell, TerrainType::Water);
+            __map.SetTerrain(cell, Terrain::Water);
             break;
         }
-        __ResetVisualization();
+        __ResetVis();
     }
 
-    void App::__GenerateRandomMap() {
-        __map.GenerateRandom(__obstacleProbability);
-        __selectedCell  = -1;
-        __hoveredCell3D = -1;
-        __ClearHistory();
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __statusMessage = "Random map generated";
+    // Generate a random mixed map and reset all visualization state
+    void App::__GenRandom() {
+        __map.GenerateRandom(__obsProb);
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ClearHist();
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __status        = "Random map generated";
     }
 
-    void App::__GenerateTerrainMap() {
+    // Generate a procedural terrain map with roads, water, forest and mountains
+    void App::__GenTerrain() {
         __map.GenerateTerrain();
-        __selectedCell  = -1;
-        __hoveredCell3D = -1;
-        __ClearHistory();
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __statusMessage = "Terrain map generated: hills, road, river, forest and mountains";
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ClearHist();
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __status        = "Terrain map generated: hills, road, river, forest and mountains";
     }
 
-    void App::__GenerateMazeMap() {
+    // Generate a maze map
+    // good for showing BFS and A* differences
+    void App::__GenMaze() {
         __map.GenerateMaze();
-        __selectedCell  = -1;
-        __hoveredCell3D = -1;
-        __ClearHistory();
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __statusMessage = "Maze map generated";
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ClearHist();
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __status        = "Maze map generated";
     }
 
-    void App::__GenerateCityPreset() {
+    // Build a city-style preset with roads, blocks and random building heights.
+    void App::__GenCity() {
         __map.ClearAll();
-        std::mt19937 rng(20260706u);
+        std::mt19937 rng(time(NULL));
         std::uniform_int_distribution<int> heightDist(0, 4);
 
         for (int r = 0; r < __map.Rows(); ++r) {
@@ -1617,33 +1745,34 @@ namespace pathlab {
                 int idx = __map.Index(r, c);
                 __map.SetHeight(idx, heightDist(rng));
                 if (r % 6 == 2 || c % 9 == 4) {
-                    __map.SetTerrain(idx, TerrainType::Road);
+                    __map.SetTerrain(idx, Terrain::Road);
                     __map.SetObstacle(idx, false);
                     __map.SetHeight(idx, 1);
                 }
                 else if (((r / 3 + c / 4) % 5 == 0) && (r % 6 != 0) && (c % 9 != 0)) {
                     __map.SetObstacle(idx, true);
-                    __map.SetTerrain(idx, TerrainType::Plain);
+                    __map.SetTerrain(idx, Terrain::Plain);
                     __map.SetHeight(idx, 2 + ((r + c) % 5));
                 }
                 else if ((r + c * 2) % 19 == 0) {
-                    __map.SetTerrain(idx, TerrainType::Forest);
+                    __map.SetTerrain(idx, Terrain::Forest);
                 }
             }
         }
         __map.SetStart(__map.Index(std::min(2, __map.Rows() - 1), std::min(2, __map.Cols() - 1)));
-        __map.SetGoal(__map.Index(std::max(0, __map.Rows() - 3), std::max(0, __map.Cols() - 3)));
-        __selectedCell = -1;
-        __hoveredCell3D = -1;
-        __ClearHistory();
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __ResetCamera3D();
-        __statusMessage = "City preset generated: roads, buildings and blocks";
+        __map.SetGoal (__map.Index(std::max(0, __map.Rows() - 3), std::max(0, __map.Cols() - 3)));
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ClearHist();
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __ResetCam();
+        __status        = "City preset generated: roads, buildings and blocks";
     }
 
-    void App::__GenerateRiverPreset() {
+    // Build a river-crossing preset with bridges and route choices
+    void App::__GenRiver() {
         __map.ClearAll();
         const int rows = __map.Rows();
         const int cols = __map.Cols();
@@ -1651,7 +1780,7 @@ namespace pathlab {
             for (int c = 0; c < cols; ++c) {
                 int idx = __map.Index(r, c);
                 __map.SetHeight(idx, std::clamp(4 + static_cast<int>(2.2 * std::sin(c * 0.23) + 1.4 * std::cos(r * 0.31)), 0, 9));
-                if ((r + c) % 17 == 0) __map.SetTerrain(idx, TerrainType::Forest);
+                if ((r + c) % 17 == 0) __map.SetTerrain(idx, Terrain::Forest);
             }
         }
         for (int c = 0; c < cols; ++c) {
@@ -1661,7 +1790,7 @@ namespace pathlab {
                 if (!__map.InBounds(r, c)) continue;
                 int idx = __map.Index(r, c);
                 __map.SetObstacle(idx, false);
-                __map.SetTerrain(idx, TerrainType::Water);
+                __map.SetTerrain(idx, Terrain::Water);
                 __map.SetHeight(idx, 0);
             }
         }
@@ -1670,7 +1799,7 @@ namespace pathlab {
             for (int c = std::max(0, bridgeCol - 1); c <= std::min(cols - 1, bridgeCol + 1); ++c) {
                 for (int r = 0; r < rows; ++r) {
                     int idx = __map.Index(r, c);
-                    __map.SetTerrain(idx, TerrainType::Road);
+                    __map.SetTerrain(idx, Terrain::Road);
                     __map.SetObstacle(idx, false);
                     __map.SetHeight(idx, 1);
                 }
@@ -1678,17 +1807,18 @@ namespace pathlab {
         }
         __map.SetStart(__map.Index(rows / 2, 1));
         __map.SetGoal(__map.Index(rows / 2, cols - 2));
-        __selectedCell = -1;
-        __hoveredCell3D = -1;
-        __ClearHistory();
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __ResetCamera3D();
-        __statusMessage = "River crossing preset generated: bridges create route choices";
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ClearHist();
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __ResetCam();
+        __status        = "River crossing preset generated: bridges create route choices";
     }
 
-    void App::__GenerateMountainPreset() {
+    // Build a mountain-pass preset where height cost finally matters
+    void App::__GenMountain() {
         __map.ClearAll();
         const int rows = __map.Rows();
         const int cols = __map.Cols();
@@ -1698,9 +1828,9 @@ namespace pathlab {
                 float ridge = std::abs(static_cast<float>(r) - rows * 0.5f - std::sin(c * 0.20f) * rows * 0.12f);
                 int h = std::clamp(8 - static_cast<int>(ridge * 0.7f), 0, 9);
                 __map.SetHeight(idx, h);
-                if (h >= 5) __map.SetTerrain(idx, TerrainType::Mountain);
+                if (h >= 5) __map.SetTerrain(idx, Terrain::Mountain);
                 if (h >= 8 && (c < cols / 3 || c > cols * 2 / 3)) __map.SetObstacle(idx, true);
-                if ((r + c) % 21 == 0) __map.SetTerrain(idx, TerrainType::Forest);
+                if ((r + c) % 21 == 0) __map.SetTerrain(idx, Terrain::Forest);
             }
         }
         for (int passCol : { cols / 3, cols * 2 / 3 }) {
@@ -1709,121 +1839,129 @@ namespace pathlab {
                     if (!__map.InBounds(r, c)) continue;
                     int idx = __map.Index(r, c);
                     __map.SetObstacle(idx, false);
-                    __map.SetTerrain(idx, TerrainType::Road);
+                    __map.SetTerrain(idx, Terrain::Road);
                     __map.SetHeight(idx, 2);
                 }
             }
         }
         __map.SetStart(__map.Index(rows - 3, 2));
         __map.SetGoal(__map.Index(2, cols - 3));
-        __selectedCell  = -1;
-        __hoveredCell3D = -1;
-        __ClearHistory();
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __ResetCamera3D();
-        __statusMessage = "Mountain pass preset generated: height cost matters";
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ClearHist();
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __ResetCam();
+        __status        = "Mountain pass preset generated: height cost matters";
     }
 
-    void App::__RunDemoMode() {
-        __GenerateRiverPreset();
-        __view3D = true;
-        __smoothTerrain3D = true;
-        __movementProfile = MovementProfile::Pedestrian;
-        __options.allowDiagonal = true;
-        __heuristicWeightValue  = 1.25f;
-        __terrainWeightValue    = 1.0f;
-        __heightWeightValue     = 0.35f;
-        __ResetCamera3D();
-        __RunAlgorithm(AlgorithmKind::AStar);
-        __frameIndex    = 0;
-        __playing       = true;
-        __statusMessage = "Demo mode: River preset + Diorama + A* animation";
+    // Set up a pretty demo scene and run A* automatically
+    // nyeah it's a constant demo caz I don't want to add more things
+    void App::__RunDemo() {
+        __GenRiver();
+        __is3D      = true;
+        __smooth3D  = true;
+        __prof      = MoveProfile::Pedestrian;
+        __opt.diag  = true;
+        __heurVal   = 1.25f;
+        __terrVal   = 1.0f;
+        __hgtVal    = 0.35f;
+        __ResetCam();
+        __RunAlg(AlgKind::AStar);
+        __frmIdx    = 0;
+        __play      = true;
+        __status    = "Demo mode: River preset + Diorama + A* animation";
     }
 
+    // Resize the map from sliders and reset camera/view state
     void App::__ApplyMapSize() {
-        int rows = static_cast<int>(std::round(__mapRowsValue));
-        int cols = static_cast<int>(std::round(__mapColsValue));
-        __PushUndoState("Resize map");
+        int rows = static_cast<int>(std::round(__rowVal));
+        int cols = static_cast<int>(std::round(__colVal));
+        __PushUndo("Resize map");
         __map.Resize(rows, cols);
-        __selectedCell = -1;
-        __hoveredCell3D = -1;
-        __ResetVisualization();
-        __ResetCamera3D();
-        __mapPan2D = { 0.0f, 0.0f };
-        __mapZoom2D = 1.0f;
-        __statusMessage = "Map size changed to " + std::to_string(__map.Rows()) + " x " + std::to_string(__map.Cols());
+        __selCell       = -1;
+        __hov3D         = -1;
+        __ResetVis();
+        __ResetCam();
+        __pan2D         = { 0.0f, 0.0f };
+        __zoom2D        = 1.0f;
+        __status        = "Map size changed to " + std::to_string(__map.Rows()) + " x " + std::to_string(__map.Cols());
     }
 
-    void App::__RunAlgorithm(AlgorithmKind kind) {
-        __SyncOptionsFromSliders();
-        __result = Pathfinder::Run(__map, kind, __options);
-        __hasResult = true;
-        __frameIndex = 0;
-        __playing = true;
-        __accumulator = 0.0f;
-        __statusMessage = "Running " + __result.algorithmName + " as " + __MovementProfileName();
+    // Run the selected pathfinding alg and start animation playback
+    void App::__RunAlg(AlgKind Type) {
+        __SyncOpt();
+        __result = Pathfinder::Run(__map, Type, __opt);
+        __hasRes = true;
+        __frmIdx = 0;
+        __play   = true;
+        __acc    = 0.0f;
+        __status = "Running " + __result.algName + " as " + __ProfName();
     }
 
-    void App::__RunBenchmark() {
-        __SyncOptionsFromSliders();
-        __benchmarkRows.clear();
-        const std::array<AlgorithmKind, 5> algorithms{
-            AlgorithmKind::BFS,
-            AlgorithmKind::Dijkstra,
-            AlgorithmKind::AStar,
-            AlgorithmKind::WeightedAStar,
-            AlgorithmKind::GreedyBestFirst
+    // Run all algorithms once and store their comparison data
+    void App::__RunBench() {
+        __SyncOpt();
+        __benchRows.clear();
+        const std::array<AlgKind, 5> algorithms{
+            AlgKind::BFS,
+            AlgKind::Dijkstra,
+            AlgKind::AStar,
+            AlgKind::WAStar,
+            AlgKind::Greedy
         };
 
-        for (AlgorithmKind algorithm : algorithms) {
-            SearchResult r = Pathfinder::Run(__map, algorithm, __options);
-            __benchmarkRows.push_back({ r.algorithmName, r.found, r.pathLength, r.expandedNodes, r.generatedNodes, r.elapsedMs });
+        for (AlgKind alg : algorithms) {
+            SearchRes r = Pathfinder::Run(__map, alg, __opt);
+            __benchRows.push_back({ r.algName, r.found, r.pathLen, r.expNodes, r.genNodes, r.timeMs });
         }
-        __statusMessage = "Benchmark finished for " + std::to_string(__benchmarkRows.size()) + " algorithms as " + __MovementProfileName();
+        __status = "Benchmark finished for " + std::to_string(__benchRows.size()) + " algorithms as " + __ProfName();
     }
 
-    void App::__CompareAgents() {
-        __SyncOptionsFromSliders();
-        __agentComparisonRows.clear();
-        const std::array<MovementProfile, 4> profiles{
-            MovementProfile::Pedestrian,
-            MovementProfile::Car,
-            MovementProfile::Offroad,
-            MovementProfile::Drone
+    // Run A* for every movement prof on the same map
+    void App::__CmpAgents() {
+        __SyncOpt();
+        __agentRows.clear();
+        const std::array<MoveProfile, 4> profiles{
+            MoveProfile::Pedestrian,
+            MoveProfile::Car,
+            MoveProfile::Offroad,
+            MoveProfile::Drone
         };
-        for (MovementProfile profile : profiles) {
-            AlgorithmOptions opts = __options;
-            opts.profile = profile;
-            SearchResult r = Pathfinder::Run(__map, AlgorithmKind::AStar, opts);
-            __agentComparisonRows.push_back({ profile, ProfileDisplayName(profile), r.found, r.pathLength, r.expandedNodes, r.elapsedMs, r.finalPath });
+        for (MoveProfile prof : profiles) {
+            AlgOpt opts = __opt;
+            opts.prof = prof;
+            SearchRes r = Pathfinder::Run(__map, AlgKind::AStar, opts);
+            __agentRows.push_back({ prof, ProfNameOf(prof), r.found, r.pathLen, r.expNodes, r.timeMs, r.finalPath });
         }
-        __showAgentComparison = true;
-        __statusMessage = "Agent path comparison finished: same map, different cost models";
+        __showAgents = true;
+        __status = "Agent path comparison finished: same map, different cost models";
     }
 
-    void App::__ExportScreenshot() {
-        std::string path = EnsurePngExtension(NativePngFileDialog());
+    // Export the cur window as a PNG screenshot
+    void App::__ExportPng() {
+        std::string path = FixPngExt(PngDlg());
         if (path.empty()) {
-            __statusMessage = "Screenshot export canceled";
+            __status = "Screenshot export canceled";
             return;
         }
         try {
             std::filesystem::path p(path);
             if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
             TakeScreenshot(path.c_str());
-            __statusMessage = "Screenshot exported: " + CompactDisplayPath(path);
+            __status = "Screenshot exported: " + CompactPath(path);
         }
         catch (...) {
-            __statusMessage = "Failed to export screenshot";
+            __status = "Failed to export screenshot";
         }
     }
 
-    void App::__SaveCurrentMap() {
-        std::string path = EnsurePathMapExtension(NativeMapFileDialog(true));
+    // Save the cur map to a .pathmap file
+    void App::__SaveMap() {
+        std::string path = FixMapExt(MapDlg(true));
         if (path.empty()) {
-            __statusMessage = "Save canceled";
+            __status = "Save canceled";
             return;
         }
 
@@ -1832,273 +1970,299 @@ namespace pathlab {
             if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
         }
         catch (...) {
-            __statusMessage = "Failed to prepare target folder";
+            __status = "Failed to prepare target folder";
             return;
         }
 
         if (__map.SaveToFile(path)) {
-            __currentMapPath = path;
-            __statusMessage = "Map saved: " + CompactDisplayPath(path);
+            __curMapPath = path;
+            __status = "Map saved: " + CompactPath(path);
         }
         else {
-            __statusMessage = "Failed to save: " + CompactDisplayPath(path);
+            __status = "Failed to save: " + CompactPath(path);
         }
     }
 
-    void App::__LoadCurrentMap() {
-        std::string path = NativeMapFileDialog(false);
+    // Load a .pathmap file and sync UI sliders with the loaded size
+    void App::__LoadMap() {
+        std::string path = MapDlg(false);
         if (path.empty()) {
-            __statusMessage = "Open canceled";
+            __status = "Open canceled";
             return;
         }
 
         std::string error;
         if (__map.LoadFromFile(path, &error)) {
-            __currentMapPath    = path;
-            __mapRowsValue      = static_cast<float>(__map.Rows());
-            __mapColsValue      = static_cast<float>(__map.Cols());
-            __selectedCell      = -1;
-            __hoveredCell3D     = -1;
-            __ResetVisualization();
-            __ResetCamera3D();
-            __statusMessage     = "Map loaded: " + CompactDisplayPath(path);
+            __curMapPath    = path;
+            __rowVal        = static_cast<float>(__map.Rows());
+            __colVal        = static_cast<float>(__map.Cols());
+            __selCell       = -1;
+            __hov3D         = -1;
+            __ResetVis();
+            __ResetCam();
+            __status        = "Map loaded: " + CompactPath(path);
         }
         else {
-            __statusMessage = error.empty() ? ("Failed to open: " + CompactDisplayPath(path)) : error;
+            __status = error.empty() ? ("Failed to open: " + CompactPath(path)) : error;
         }
     }
 
-    void App::__ExportBenchmarkCsv() {
+    // Export benchmark rows as CSV
+    void App::__ExportCsv() {
         try {
             std::filesystem::create_directories("exports");
             std::ofstream out("exports/benchmark.csv");
             if (!out) {
-                __statusMessage = "Failed to create exports/benchmark.csv";
+                __status = "Failed to create exports/benchmark.csv";
                 return;
             }
-            out << "algorithm,found,path_cost,expanded_nodes,generated_nodes,time_ms\n";
-            for (const auto& row : __benchmarkRows) {
-                out << row.algorithmName << ',' << (row.found ? "true" : "false") << ','
-                    << row.pathLength << ',' << row.expandedNodes << ',' << row.generatedNodes << ',' << row.elapsedMs << '\n';
+            out << "alg,found,path_cost,expanded_nodes,generated_nodes,time_ms\n";
+            for (const auto& row : __benchRows) {
+                out << row.algName << ',' << (row.found ? "true" : "false") << ','
+                    << row.pathLen << ',' << row.expNodes << ',' << row.genNodes << ',' << row.timeMs << '\n';
             }
-            __statusMessage = "Benchmark exported to exports/benchmark.csv";
+            __status = "Benchmark exported to exports/benchmark.csv";
         }
         catch (...) {
-            __statusMessage = "Failed to export benchmark CSV";
+            __status = "Failed to export benchmark CSV";
         }
     }
 
-    void App::__PushUndoState(const std::string& label) {
-        __undoStack.push_back(MapHistoryState{ __map, label });
-        if (__undoStack.size() > 80) __undoStack.erase(__undoStack.begin());
-        __redoStack.clear();
+    // Push cur map into undo stack before an edit
+    void App::__PushUndo(const std::string& label) {
+        __undo.push_back(MapSnap{ __map, label });
+        if (__undo.size() > 80) __undo.erase(__undo.begin());
+        __redo.clear();
     }
 
-    void App::__ClearHistory() {
-        __undoStack.clear();
-        __redoStack.clear();
-        __lastEditedCell = -1;
+    // Clear undo/redo stacks after generating or loading a new map
+    void App::__ClearHist() {
+        __undo.clear();
+        __redo.clear();
+        __lastCell = -1;
     }
 
+    // Restore the last map state from undo stack
     void App::__UndoEdit() {
-        if (__undoStack.empty()) {
-            __statusMessage = "Nothing to undo";
+        if (__undo.empty()) {
+            __status = "Nothing to undo";
             return;
         }
-        __redoStack.push_back(MapHistoryState{ __map, "redo" });
-        MapHistoryState state = __undoStack.back();
-        __undoStack.pop_back();
-        __map = state.map;
-        __mapRowsValue  = static_cast<float>(__map.Rows());
-        __mapColsValue  = static_cast<float>(__map.Cols());
-        __selectedCell  = -1;
-        __hoveredCell3D = -1;
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __statusMessage = "Undo: " + state.label;
+        __redo.push_back(MapSnap{ __map, "redo" });
+        MapSnap state = __undo.back();
+        __undo.pop_back();
+        __map           = state.map;
+        __rowVal        = static_cast<float>(__map.Rows());
+        __colVal        = static_cast<float>(__map.Cols());
+        __selCell       = -1;
+        __hov3D         = -1;
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __status        = "Undo: " + state.label;
     }
 
+    // Restore a state from redo stack, because regret can have regret too
     void App::__RedoEdit() {
-        if (__redoStack.empty()) {
-            __statusMessage = "Nothing to redo";
+        if (__redo.empty()) {
+            __status = "Nothing to redo";
             return;
         }
-        __undoStack.push_back(MapHistoryState{ __map, "undo" });
-        MapHistoryState state = __redoStack.back();
-        __redoStack.pop_back();
-        __map = state.map;
-        __mapRowsValue  = static_cast<float>(__map.Rows());
-        __mapColsValue  = static_cast<float>(__map.Cols());
-        __selectedCell  = -1;
-        __hoveredCell3D = -1;
-        __showAgentComparison = false;
-        __agentComparisonRows.clear();
-        __ResetVisualization();
-        __statusMessage = "Redo";
+        __undo.push_back(MapSnap{ __map, "undo" });
+        MapSnap state = __redo.back();
+        __redo.pop_back();
+        __map           = state.map;
+        __rowVal        = static_cast<float>(__map.Rows());
+        __colVal        = static_cast<float>(__map.Cols());
+        __selCell       = -1;
+        __hov3D         = -1;
+        __showAgents    = false;
+        __agentRows.clear();
+        __ResetVis();
+        __status        = "Redo";
     }
 
-    void App::__ResetVisualization() {
-        __hasResult             = false;
-        __result                = SearchResult{};
-        __frameIndex            = 0;
-        __playing               = false;
-        __accumulator           = 0.0f;
-        __showAgentComparison   = false;
-        __agentComparisonRows.clear();
+    // Clear alg result and animation state after map changes
+    void App::__ResetVis() {
+        __hasRes     = false;
+        __result     = SearchRes{};
+        __frmIdx     = 0;
+        __play       = false;
+        __acc        = 0.0f;
+        __showAgents = false;
+        __agentRows.clear();
     }
 
-    void App::__SyncOptionsFromSliders() {
-        __options.heuristicWeight   = static_cast<double>(__heuristicWeightValue);
-        __options.terrainWeight     = static_cast<double>(__terrainWeightValue);
-        __options.heightWeight      = static_cast<double>(__heightWeightValue);
-        __options.profile           = __movementProfile;
+    // Copy UI slider values into alg opt
+    void App::__SyncOpt() {
+        __opt.hW    = static_cast<double>(__heurVal);
+        __opt.terrW = static_cast<double>(__terrVal);
+        __opt.hgtW  = static_cast<double>(__hgtVal);
+        __opt.prof  = __prof;
     }
 
-    void App::__LoadUIFont() {
+    // Load a better UI font if the file exists
+    // otherwise use raylib default
+    void App::__LoadFont() {
         for (const char* path : FontCandidates()) {
             if (!FileExists(path)) continue;
             Font loaded = LoadFontEx(path, 192, nullptr, 0);
             if (loaded.texture.id != 0) {
-                __uiFont = loaded;
-                SetTextureFilter(__uiFont.texture, TEXTURE_FILTER_BILINEAR);
-                __customFontLoaded = true;
-                __fontStatus = path;
+                __font = loaded;
+                SetTextureFilter(__font.texture, TEXTURE_FILTER_BILINEAR);
+                __fontLoaded = true;
+                __fontStat = path;
                 return;
             }
         }
-        __uiFont = GetFontDefault();
-        SetTextureFilter(__uiFont.texture, TEXTURE_FILTER_BILINEAR);
-        __customFontLoaded = false;
-        __fontStatus = "default raylib font; add assets/fonts/ui.ttf to override";
+        __font = GetFontDefault();
+        SetTextureFilter(__font.texture, TEXTURE_FILTER_BILINEAR);
+        __fontLoaded = false;
+        __fontStat   = "default raylib font; add assets/fonts/ui.ttf to override";
     }
 
-    void App::__UnloadUIFont() {
-        if (__customFontLoaded) {
-            UnloadFont(__uiFont);
-            __customFontLoaded = false;
+    // Unload custom font before closing the window
+    void App::__UnloadFont() {
+        if (__fontLoaded) {
+            UnloadFont(__font);
+            __fontLoaded = false;
         }
     }
 
-    bool App::__Button(Rectangle bounds, const char* text) {
+    // Draw a normal button and return whether it was pressed
+    bool App::__Button(Rectangle box, const char* text) {
         Vector2 mouse = GetMousePosition();
-        bool hover = CheckCollisionPointRec(mouse, bounds);
+        bool hover   = CheckCollisionPointRec(mouse, box);
         bool pressed = hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
-        Color fill = hover ? (__themeMode == ThemeMode::Dark ? ColorSet::ButtonHoverDark : ColorSet::ButtonHoverLight) : (__themeMode == ThemeMode::Dark ? ColorSet::ButtonIdleDark : ColorSet::ButtonIdleLight);
+        Color fill   = hover ? (__theme == Theme::Dark ? Pal::BtnHoverD : Pal::BtnHoverL) : (__theme == Theme::Dark ? Pal::BtnIdleD : Pal::BtnIdleL);
         if (pressed) fill = __AccentColor();
 
-        DrawRectangleRounded(bounds, 0.18f, 8, fill);
-        DrawRectangleRoundedLines(bounds, 0.18f, 8, 1.0f, __GridLineColor());
+        DrawRectangleRounded(box, 0.18f, 8, fill);
+        DrawRectangleRoundedLines(box, 0.18f, 8, 1.0f, __GridColor());
 
-        float textWidth = __MeasureTextUI(text, 17);
-        __DrawTextUIBold(text, bounds.x + (bounds.width - textWidth) / 2.0f, bounds.y + (bounds.height - __S(21.0f)) * 0.5f, 17, __TextColor());
+        float textWidth = __MeasureText(text, 17);
+        __TextBold(text, box.x + (box.width - textWidth) / 2.0f, box.y + (box.height - __S(21.0f)) * 0.5f, 17, __TextColor());
         return pressed;
     }
 
-    bool App::__ToggleButton(Rectangle bounds, const char* text, bool active) {
+    // Draw a toggle button and return whether the user clicked it
+    bool App::__TogBtn(Rectangle box, const char* text, bool active) {
         Vector2 mouse = GetMousePosition();
-        bool hover = CheckCollisionPointRec(mouse, bounds);
+        bool hover = CheckCollisionPointRec(mouse, box);
         bool pressed = hover && IsMouseButtonPressed(MOUSE_LEFT_BUTTON);
-        Color fill = active ? __AccentColor() : (hover ? (__themeMode == ThemeMode::Dark ? ColorSet::ButtonHoverDark : ColorSet::ButtonHoverLight) : (__themeMode == ThemeMode::Dark ? ColorSet::ButtonIdleDark : ColorSet::ButtonIdleLight));
+        Color fill = active ? __AccentColor() : (hover ? (__theme == Theme::Dark ? Pal::BtnHoverD : Pal::BtnHoverL) : (__theme == Theme::Dark ? Pal::BtnIdleD : Pal::BtnIdleL));
 
-        DrawRectangleRounded(bounds, 0.18f, 8, fill);
-        DrawRectangleRoundedLines(bounds, 0.18f, 8, 1.0f, __GridLineColor());
+        DrawRectangleRounded(box, 0.18f, 8, fill);
+        DrawRectangleRoundedLines(box, 0.18f, 8, 1.0f, __GridColor());
 
-        float textWidth = __MeasureTextUI(text, 17);
-        __DrawTextUIBold(text, bounds.x + (bounds.width - textWidth) / 2.0f, bounds.y + (bounds.height - __S(21.0f)) * 0.5f, 17, active ? ColorSet::ActiveButtonText : __TextColor());
+        float textWidth = __MeasureText(text, 17);
+        __TextBold(text, box.x + (box.width - textWidth) / 2.0f, box.y + (box.height - __S(21.0f)) * 0.5f, 17, active ? Pal::BtnTextOn : __TextColor());
         return pressed;
     }
 
-    bool App::__Slider(Rectangle bounds, const char* label, float* value, float minValue, float maxValue, bool integerDisplay) {
-        const float labelW  = std::min(__S(132.0f), bounds.width * 0.34f);
+    // Draw and update a slider
+    // yes, this is a tiny handmade UI system
+    // I'M THE GENIUS HA HA HA HA (*laughter by old money
+    bool App::__Slider(Rectangle box, const char* label, float* val, float loVal, float hiVal, bool intDisp) {
+        const float labelW  = std::min(__S(132.0f), box.width * 0.34f);
         const float valueW  = __S(58.0f);
         const float gap     = __S(10.0f);
-        const float barX    = bounds.x + labelW + gap;
-        const float barW    = std::max(__S(70.0f), bounds.width - labelW - valueW - gap * 2.0f);
-        const float barY    = bounds.y + bounds.height * 0.5f - __S(4.0f);
+        const float barX    = box.x + labelW + gap;
+        const float barW    = std::max(__S(70.0f), box.width - labelW - valueW - gap * 2.0f);
+        const float barY    = box.y + box.height * 0.5f - __S(4.0f);
 
-        __DrawTextUIBold(label, bounds.x, bounds.y + __S(3.0f), 15, __TextColor());
+        __TextBold(label, box.x, box.y + __S(3.0f), 15, __TextColor());
 
         Rectangle bar{ barX, barY, barW, __S(8.0f) };
-        DrawRectangleRounded(bar, 0.4f, 8, __themeMode == ThemeMode::Dark ? ColorSet::ControlTrackDark : ColorSet::ControlTrackLight);
+        DrawRectangleRounded(bar, 0.4f, 8, __theme == Theme::Dark ? Pal::TrackD : Pal::TrackL);
 
-        float ratio = (*value - minValue) / (maxValue - minValue);
+        float ratio = (*val - loVal) / (hiVal - loVal);
         ratio = std::clamp(ratio, 0.0f, 1.0f);
         Rectangle progress = bar;
         progress.width *= ratio;
         DrawRectangleRounded(progress, 0.4f, 8, __AccentColor());
 
         float knobX = bar.x + bar.width * ratio;
-        DrawCircle(static_cast<int>(knobX), static_cast<int>(bar.y + bar.height / 2.0f), __S(8.0f), __themeMode == ThemeMode::Dark ? ColorSet::OverlayDark : ColorSet::OverlayLight);
+        DrawCircle(static_cast<int>(knobX), static_cast<int>(bar.y + bar.height / 2.0f), __S(8.0f), __theme == Theme::Dark ? Pal::OverlayD : Pal::OverlayL);
 
         char buffer[64];
         if (std::string(label) == "Obstacle") {
-            std::snprintf(buffer, sizeof(buffer), "%.0f%%", *value * 100.0f);
+            std::snprintf(buffer, sizeof(buffer), "%.0f%%", *val * 100.0f);
         }
-        else if (integerDisplay) {
-            std::snprintf(buffer, sizeof(buffer), "%.0f", *value);
+        else if (intDisp) {
+            std::snprintf(buffer, sizeof(buffer), "%.0f", *val);
         }
         else {
-            std::snprintf(buffer, sizeof(buffer), "%.2f", *value);
+            std::snprintf(buffer, sizeof(buffer), "%.2f", *val);
         }
-        __DrawTextUIBold(buffer, bar.x + bar.width + gap, bounds.y + __S(3.0f), 15, __MutedTextColor());
+        __TextBold(buffer, bar.x + bar.width + gap, box.y + __S(3.0f), 15, __MutedColor());
 
         bool changed = false;
         if (CheckCollisionPointRec(GetMousePosition(), { bar.x - __S(8.0f), bar.y - __S(14.0f), bar.width + __S(16.0f), bar.height + __S(28.0f) }) && IsMouseButtonDown(MOUSE_LEFT_BUTTON)) {
             float newRatio = (GetMouseX() - bar.x) / bar.width;
             newRatio = std::clamp(newRatio, 0.0f, 1.0f);
-            *value = minValue + newRatio * (maxValue - minValue);
+            *val = loVal + newRatio * (hiVal - loVal);
             changed = true;
         }
         return changed;
     }
 
-    float App::__S(float value) const {
-        return value * __uiScale;
+    // Scale a UI size by cur UI scale
+    float App::__S(float val) const {
+        return val * __scale;
     }
 
-    void App::__DrawTextUI(const std::string& text, float x, float y, float fontSize, Color color) const {
-        const float scaledSize = fontSize * __uiScale;
-        const float spacing = 0.20f * __uiScale;
-        DrawTextEx(__uiFont, text.c_str(), Vector2{ x, y }, scaledSize, spacing, color);
+    // Draw normal UI text with the loaded UI font
+    void App::__Text(const std::string& text, float x, float y, float fs, Color color) const {
+        const float scaledSize = fs * __scale;
+        const float spacing = 0.20f * __scale;
+        DrawTextEx(__font, text.c_str(), Vector2{ x, y }, scaledSize, spacing, color);
     }
 
-    void App::__DrawTextUIBold(const std::string& text, float x, float y, float fontSize, Color color) const {
-        const float scaledSize  = fontSize * __uiScale;
-        const float spacing     = 0.20f * __uiScale;
-        const float offset      = std::max(0.55f, 0.55f * __uiScale);
-        DrawTextEx(__uiFont, text.c_str(), Vector2{ x, y }, scaledSize, spacing, color);
-        DrawTextEx(__uiFont, text.c_str(), Vector2{ x + offset, y }, scaledSize, spacing, color);
-        DrawTextEx(__uiFont, text.c_str(), Vector2{ x, y + offset * 0.35f }, scaledSize, spacing, color);
+    // Fake bold text by drawing it a few times
+    // this is the most stupid code in this project
+    // dare u stare at it for 3 seconds?
+    void App::__TextBold(const std::string& text, float x, float y, float fs, Color color) const {
+        const float scaledSize  = fs * __scale;
+        const float spacing     = 0.20f * __scale;
+        const float offset      = std::max(0.55f, 0.55f * __scale);
+        DrawTextEx(__font, text.c_str(), Vector2{ x, y }, scaledSize, spacing, color);
+        DrawTextEx(__font, text.c_str(), Vector2{ x + offset, y }, scaledSize, spacing, color);
+        DrawTextEx(__font, text.c_str(), Vector2{ x, y + offset * 0.35f }, scaledSize, spacing, color);
     }
 
-    float App::__MeasureTextUI(const std::string& text, float fontSize) const {
-        const float scaledSize = fontSize * __uiScale;
-        return MeasureTextEx(__uiFont, text.c_str(), scaledSize, 0.20f * __uiScale).x;
+    // Measure UI text width using the same font settings as drawing
+    float App::__MeasureText(const std::string& text, float fs) const {
+        const float scaledSize = fs * __scale;
+        return MeasureTextEx(__font, text.c_str(), scaledSize, 0.20f * __scale).x;
     }
 
-    int App::__FrameCount() const {
-        return __hasResult ? static_cast<int>(__result.frames.size()) : 0;
+    // Return animation frm count for cur alg resul
+    int App::__FrameCnt() const {
+        return __hasRes ? static_cast<int>(__result.frames.size()) : 0;
     }
 
-    const SearchFrame* App::__CurrentFrame() const {
-        if (!__hasResult || __result.frames.empty()) return nullptr;
-        int idx = std::clamp(__frameIndex, 0, __FrameCount() - 1);
+    // Return the currently selected animation frm
+    // or nullptr when nothing exists (another corner case
+    const SearchFrm* App::__CurFrame() const {
+        if (!__hasRes || __result.frames.empty()) return nullptr;
+        int idx = std::clamp(__frmIdx, 0, __FrameCnt() - 1);
         return &__result.frames[static_cast<size_t>(idx)];
     }
 
-    int App::__MouseToCell(Vector2 mouse) const {
+    // Convert 2D mouse position into grid cell index
+    int App::__MouseCell(Vector2 mouse) const {
         const float padding         = __S(28.0f);
         const float usableW         = __canvas.width - 2.0f * padding;
         const float usableH         = __canvas.height - 2.0f * padding;
         const float baseCellSize    = std::floor(std::min(usableW / static_cast<float>(__map.Cols()), usableH / static_cast<float>(__map.Rows())));
-        const float cellSize        = std::max(3.0f, baseCellSize * __mapZoom2D);
+        const float cellSize        = std::max(3.0f, baseCellSize * __zoom2D);
         if (cellSize <= 0.0f) return -1;
 
         const float gridW = cellSize * static_cast<float>(__map.Cols());
         const float gridH = cellSize * static_cast<float>(__map.Rows());
-        const float startX = __canvas.x + (__canvas.width - gridW) / 2.0f + __mapPan2D.x;
-        const float startY = __canvas.y + (__canvas.height - gridH) / 2.0f + __mapPan2D.y;
+        const float startX = __canvas.x + (__canvas.width - gridW) / 2.0f + __pan2D.x;
+        const float startY = __canvas.y + (__canvas.height - gridH) / 2.0f + __pan2D.y;
 
         if (mouse.x < startX || mouse.y < startY || mouse.x >= startX + gridW || mouse.y >= startY + gridH) {
             return -1;
@@ -2110,7 +2274,8 @@ namespace pathlab {
         return __map.Index(row, col);
     }
 
-    int App::__PickCell3D(Vector2 mouse) const {
+    // Ray-pick a 3D cell under the mouse
+    int App::__Pick3D(Vector2 mouse) const {
         if (!CheckCollisionPointRec(mouse, __canvas)) return -1;
 
         Ray ray = GetMouseRay(mouse, __camera);
@@ -2118,27 +2283,28 @@ namespace pathlab {
         float bestDistance = 1.0e30f;
 
         for (int cell = 0; cell < __map.Count(); ++cell) {
-            BoundingBox box = __CellBoundingBox3D(cell);
+            BoundingBox box  = __CellBox3D(cell);
             RayCollision hit = GetRayCollisionBox(ray, box);
             if (hit.hit && hit.distance < bestDistance) {
                 bestDistance = hit.distance;
-                bestCell = cell;
+                bestCell     = cell;
             }
         }
 
         return bestCell;
     }
 
-    BoundingBox App::__CellBoundingBox3D(int cell) const {
+    // Build the 3D picking box for one map cell
+    BoundingBox App::__CellBox3D(int cell) const {
         if (cell < 0 || cell >= __map.Count()) {
             return BoundingBox{ Vector3{ 0.0f, 0.0f, 0.0f }, Vector3{ 0.0f, 0.0f, 0.0f } };
         }
 
-        GridCoord g = __map.Coord(cell);
-        const float x = static_cast<float>(g.col) - static_cast<float>(__map.Cols() - 1) * 0.5f;
-        const float z = static_cast<float>(g.row) - static_cast<float>(__map.Rows() - 1) * 0.5f;
+        GPos g = __map.Coord(cell);
+        const float x    = static_cast<float>(g.col) - static_cast<float>(__map.Cols() - 1) * 0.5f;
+        const float z    = static_cast<float>(g.row) - static_cast<float>(__map.Rows() - 1) * 0.5f;
         const float half = 0.46f;
-        const float h = __CellVisualHeight3D(cell);
+        const float h    = __CellHgt3D(cell);
 
         return BoundingBox{
             Vector3{ x - half, 0.0f, z - half },
@@ -2146,7 +2312,8 @@ namespace pathlab {
         };
     }
 
-    float App::__SoftSurfaceHeightAt(int row, int col) const {
+    // Smooth nearby cell heights to make diorama terrain less blocky
+    float App::__SoftHgtAt(int row, int col) const {
         row = std::clamp(row, 0, __map.Rows() - 1);
         col = std::clamp(col, 0, __map.Cols() - 1);
 
@@ -2165,36 +2332,38 @@ namespace pathlab {
             }
         }
 
-        const float h01 = weightSum > 0.0f ? sum / weightSum : 0.0f;
-        const float scale = std::max(0.10f, __terrainHeightScale) * 0.85f;
+        const float h01   = weightSum > 0.0f ? sum / weightSum : 0.0f;
+        const float scale = std::max(0.10f, __hgtScale) * 0.85f;
         return 0.09f + h01 * scale;
     }
 
-    float App::__CellVisualHeight3D(int cell) const {
+    // Return the height actually used for 3D rendering
+    float App::__CellHgt3D(int cell) const {
         if (cell < 0 || cell >= __map.Count()) return 0.0f;
-        if (!__smoothTerrain3D) return __CellSurfaceHeight(cell);
-        GridCoord g = __map.Coord(cell);
-        return __SoftSurfaceHeightAt(g.row, g.col);
+        if (!__smooth3D) return __CellHgt(cell);
+        GPos g = __map.Coord(cell);
+        return __SoftHgtAt(g.row, g.col);
     }
 
-    Color App::__CellColor(int cell, const SearchFrame* frame) const {
+    // Compute final 2D cell color after terrain, search state and endpoints
+    Color App::__CellColor(int cell, const SearchFrm* frm) const {
         const Cell& mapCell = __map.GetCell(cell);
         const float hNorm = static_cast<float>(mapCell.height) / 10.0f;
-        Color color = __TerrainVisualColor(mapCell.terrain, hNorm, false);
+        Color color = __TerrainColor(mapCell.terrain, hNorm, false);
 
-        if (__map.IsObstacle(cell) && mapCell.terrain != TerrainType::Water) {
-            color = __themeMode == ThemeMode::Dark ? ColorSet::CellObstacleDark : ColorSet::CellObstacleLight;
+        if (__map.IsObstacle(cell) && mapCell.terrain != Terrain::Water) {
+            color = __theme == Theme::Dark ? Pal::CellObsD : Pal::CellObsL;
         }
 
-        if (frame != nullptr) {
-            Color closed    = __themeMode == ThemeMode::Dark ? ColorSet::CellClosedDark  : ColorSet::CellClosedLight;
-            Color open      = __themeMode == ThemeMode::Dark ? ColorSet::CellOpenDark    : ColorSet::CellOpenLight;
-            Color path      = __themeMode == ThemeMode::Dark ? ColorSet::CellPathDark    : ColorSet::CellPathLight;
-            Color current   = __themeMode == ThemeMode::Dark ? ColorSet::CellCurrentDark : ColorSet::AccentLight;
-            if (__ContainsCell(frame->closed, cell))    color = Blend(color, closed, 0.68f);
-            if (__ContainsCell(frame->open, cell))      color = Blend(color, open, 0.70f);
-            if (__ContainsCell(frame->path, cell))      color = path;
-            if (frame->current == cell)                 color = current;
+        if (frm != nullptr) {
+            Color closed    = __theme == Theme::Dark ? Pal::CellClosedD  : Pal::CellClosedL;
+            Color open      = __theme == Theme::Dark ? Pal::CellOpenD    : Pal::CellOpenL;
+            Color path      = __theme == Theme::Dark ? Pal::CellPathD    : Pal::CellPathL;
+            Color cur       = __theme == Theme::Dark ? Pal::CellCurD : Pal::AccentL;
+            if (__HasCell(frm->closed, cell))    color = Blend(color, closed, 0.68f);
+            if (__HasCell(frm->open, cell))      color = Blend(color, open, 0.70f);
+            if (__HasCell(frm->path, cell))      color = path;
+            if (frm->cur == cell)                color = cur;
         }
 
         if (cell == __map.Start()) return __SuccessColor();
@@ -2202,30 +2371,33 @@ namespace pathlab {
         return color;
     }
 
-    float App::__CellSurfaceHeight(int cell) const {
+    // Convert cell terrain and height val into block height
+    float App::__CellHgt(int cell) const {
         if (cell < 0 || cell >= __map.Count()) return 0.0f;
         const Cell& c = __map.GetCell(cell);
-        float h = 0.12f + static_cast<float>(c.height) * __terrainHeightScale;
+        float h = 0.12f + static_cast<float>(c.height) * __hgtScale;
         if (__map.IsObstacle(cell) || __map.IsWater(cell)) h = std::max(0.65f, h + 0.55f);
-        if (c.terrain == TerrainType::Water) h = std::max(0.18f, h * 0.32f);
+        if (c.terrain == Terrain::Water) h = std::max(0.18f, h * 0.32f);
         return h;
     }
 
-    Vector3 App::__CellWorldPosition(int cell, float extraHeight) const {
-        GridCoord g = __map.Coord(cell);
+    // Convert cell index into 3D world center position
+    Vector3 App::__CellPos(int cell, float lift) const {
+        GPos g = __map.Coord(cell);
         const float x = static_cast<float>(g.col) - static_cast<float>(__map.Cols() - 1) * 0.5f;
         const float z = static_cast<float>(g.row) - static_cast<float>(__map.Rows() - 1) * 0.5f;
-        return { x, __CellVisualHeight3D(cell) + extraHeight, z };
+        return { x, __CellHgt3D(cell) + lift, z };
     }
 
-    Vector3 App::__TerrainVertexWorld(int row, int col, float extraHeight) const {
+    // Convert terrain grid coordinate into 3D vertex position
+    Vector3 App::__TerrVtx(int row, int col, float lift) const {
         row = std::clamp(row, 0, __map.Rows() - 1);
         col = std::clamp(col, 0, __map.Cols() - 1);
         const float x = static_cast<float>(col) - static_cast<float>(__map.Cols() - 1) * 0.5f;
         const float z = static_cast<float>(row) - static_cast<float>(__map.Rows() - 1) * 0.5f;
 
-        if (__smoothTerrain3D) {
-            return { x, __SoftSurfaceHeightAt(row, col) + extraHeight, z };
+        if (__smooth3D) {
+            return { x, __SoftHgtAt(row, col) + lift, z };
         }
 
         float sum = 0.0f;
@@ -2235,14 +2407,16 @@ namespace pathlab {
                 int rr = row + dr;
                 int cc = col + dc;
                 if (rr < 0 || rr >= __map.Rows() || cc < 0 || cc >= __map.Cols()) continue;
-                sum += __CellSurfaceHeight(__map.Index(rr, cc));
+                sum += __CellHgt(__map.Index(rr, cc));
                 ++count;
             }
         }
-        const float averagedHeight = count > 0 ? sum / static_cast<float>(count) : __CellSurfaceHeight(__map.Index(row, col));
-        return { x, averagedHeight + extraHeight, z };
+        const float averagedHeight = count > 0 ? sum / static_cast<float>(count) : __CellHgt(__map.Index(row, col));
+        return { x, averagedHeight + lift, z };
     }
 
+    // Catmull-Rom interpolation helper
+    // currently kept for smooth 3D experiments
     Vector3 App::__CatmullRom(Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3, float t) const {
         const float t2 = t * t;
         const float t3 = t2 * t;
@@ -2255,47 +2429,53 @@ namespace pathlab {
         return { blend(p0.x, p1.x, p2.x, p3.x), blend(p0.y, p1.y, p2.y, p3.y), blend(p0.z, p1.z, p2.z, p3.z) };
     }
 
-    bool App::__ContainsCell(const std::vector<int>& values, int cell) const {
+    // Check whether a cell index is inside a small frm list
+    bool App::__HasCell(const std::vector<int>& values, int cell) const {
         return std::find(values.begin(), values.end(), cell) != values.end();
     }
 
-    std::string App::__EditModeName() const {
-        switch (__editMode) {
-        case EditMode::Select:      return "Select";
-        case EditMode::Wall:        return "Wall";
-        case EditMode::Erase:       return "Erase";
-        case EditMode::Start:       return "Start";
-        case EditMode::Goal:        return "Goal";
-        case EditMode::Raise:       return "Height+";
-        case EditMode::Lower:       return "Height-";
-        case EditMode::Plain:       return "Plain";
-        case EditMode::Road:        return "Road";
-        case EditMode::Forest:      return "Forest";
-        case EditMode::Mountain:    return "Mountain";
-        case EditMode::Water:       return "Water";
-        default:                    return "Unknown";
+    // Convert edit mode enum into text for the tool panel
+    std::string App::__EditName() const {
+        switch (__edit) {
+        case Edit::Select:      return "Select";
+        case Edit::Wall:        return "Wall";
+        case Edit::Erase:       return "Erase";
+        case Edit::Start:       return "Start";
+        case Edit::Goal:        return "Goal";
+        case Edit::Raise:       return "Height+";
+        case Edit::Lower:       return "Height-";
+        case Edit::Plain:       return "Plain";
+        case Edit::Road:        return "Road";
+        case Edit::Forest:      return "Forest";
+        case Edit::Mountain:    return "Mountain";
+        case Edit::Water:       return "Water";
+        default:                return "Unknown";
         }
     }
 
-    std::string App::__MovementProfileName() const {
-        return ProfileDisplayName(__movementProfile);
+    // Return cur movement prof display name
+    std::string App::__ProfName() const {
+        return ProfNameOf(__prof);
     }
 
+    // Return cur theme display name
     std::string App::__ThemeName() const {
-        return __themeMode == ThemeMode::Dark ? "Dark" : "Light";
+        return __theme == Theme::Dark ? "Dark" : "Light";
     }
 
-    std::string App::__SelectedMapPath() const {
-        int slot = std::clamp(__selectedMapSlot, 1, 3);
+    // Build the path of the selected built-in map slot
+    std::string App::__SelMapPath() const {
+        int slot = std::clamp(__mapSlot, 1, 3);
         return "maps/slot" + std::to_string(slot) + ".pathmap";
     }
 
+    // Build the small hover/selected cell information string
     std::string App::__CellInfo(int cell) const {
         if (cell < 0 || cell >= __map.Count()) return "Selected: none";
 
-        GridCoord g = __map.Coord(cell);
+        GPos g = __map.Coord(cell);
         const Cell& c = __map.GetCell(cell);
-        std::string type = __map.IsWalkable(cell, __movementProfile) ? "walkable for " + __MovementProfileName() : "blocked for " + __MovementProfileName();
+        std::string type = __map.IsWalkable(cell, __prof) ? "walkable for " + __ProfName() : "blocked for " + __ProfName();
         if (cell == __map.Start()) type = "start";
         if (cell == __map.Goal()) type = "goal";
 

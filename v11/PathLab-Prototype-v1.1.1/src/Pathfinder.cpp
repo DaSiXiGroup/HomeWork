@@ -21,16 +21,19 @@ const double BFS_EDGE_COST          = 1.0;
 const double SQRT2                  = 1.4142135623730950488;
 const double MIN_HEURISTIC_WEIGHT   = 1.0;
 
+// zero addition, totally pure
+// handmade Heap :)
 struct HeapNode{
     double  score   = 0.0;
     double  dist    = 0.0;
     int     node    = NO_NODE;
-
+    
     bool operator>(const HeapNode& other) const{
         return this->score != other.score ? this->score > other.score : this->node > other.node;
     }
 };
 
+// Convert open/closed marker array into a node list for visualization
 std::vector<int> PickMarked(const std::vector<uint8_t>& mark){
     std::vector<int> nodes;
     nodes.reserve(mark.size());
@@ -40,18 +43,21 @@ std::vector<int> PickMarked(const std::vector<uint8_t>& mark){
     return nodes;
 }
 
-double Heuristic(const GridMap& map, int a, int b, bool allowDiagonal){
-    const GridCoord ca = map.Coord(a);
-    const GridCoord cb = map.Coord(b);
+// Estimate grid distance to goal
+// Manhattan for 4-neighbor, octile for diagonal movement
+double Heuristic(const GridMap& map, int a, int b, bool diag){
+    const GPos ca = map.Coord(a);
+    const GPos cb = map.Coord(b);
     const double    dx = static_cast<double>(std::abs(ca.col - cb.col));
     const double    dy = static_cast<double>(std::abs(ca.row - cb.row));
 
-    if(!allowDiagonal) return dx + dy;
+    if(!diag) return dx + dy;
     const double diagonal = std::min(dx, dy);
     const double straight = std::max(dx, dy) - diagonal;
     return diagonal * SQRT2 + straight; // a trick from your dad SDLTF
 }
 
+// Rebuild final path by walking parent pointers backward
 std::vector<int> MakePath(const std::vector<int>& parent, int start, int goal){
     std::vector<int> path;
     for(int u = goal; u != NO_NODE; u = parent[static_cast<size_t>(u)]){
@@ -63,7 +69,8 @@ std::vector<int> MakePath(const std::vector<int>& parent, int start, int goal){
     return path;
 }
 
-double PathCost(const GridMap& map, const std::vector<int>& path, const AlgorithmOptions& options, bool useBaseCost){
+// Recalculate final path cost for stats display
+double PathCost(const GridMap& map, const std::vector<int>& path, const AlgOpt& opt, bool useBaseCost){
     if(path.size() < 2) return 0.0;
 
     double cost = 0.0;
@@ -71,11 +78,12 @@ double PathCost(const GridMap& map, const std::vector<int>& path, const Algorith
         const int u = path[i - 1], v = path[i];
         cost += useBaseCost ? 
                               map.BaseMoveCost(u, v)
-                            : map.StepCost(u, v, options.terrainWeight, options.heightWeight, options.profile);
+                            : map.StepCost(u, v, opt.terrW, opt.hgtW, opt.prof);
     }
     return cost;
 }
 
+// SearchState keeps all temporary arrays and the frames we need for animation
 struct SearchState{
     explicit SearchState(int nodeCount)
         : dist(static_cast<size_t>(nodeCount), INF_DIST),
@@ -88,40 +96,46 @@ struct SearchState{
     std::vector<uint8_t> open, closed;
     int step = 0;
 
-    void SaveFrame(SearchResult& result, int current, bool finished, bool found, const std::vector<int>& path = {}) const{
-        SearchFrame frame;
-        frame.step      = step;
-        frame.current   = current;
-        frame.open      = PickMarked(open);
-        frame.closed    = PickMarked(closed);
-        frame.path      = path;
-        frame.finished  = finished;
-        frame.found     = found;
-        result.frames.push_back(std::move(frame));
+    // Save one visualization frm
+    // without this, animation has nothing to replay
+    // memroibility come to support!
+    void SaveFrame(SearchRes& result, int cur, bool finished, bool found, const std::vector<int>& path = {}) const{
+        SearchFrm frm;
+        frm.step      = step;
+        frm.cur   = cur;
+        frm.open      = PickMarked(open);
+        frm.closed    = PickMarked(closed);
+        frm.path      = path;
+        frm.finished  = finished;
+        frm.found     = found;
+        result.frames.push_back(std::move(frm));
     }
 };
 
-SearchResult EmptyResult(const SearchAlgorithm& algorithm){
-    SearchResult result;
-    result.algorithm        = algorithm.Kind();
-    result.algorithmName    = algorithm.Name();
+// Create a result object with alg metadata filled in
+SearchRes EmptyResult(const Alg& alg){
+    SearchRes result;
+    result.alg        = alg.Type();
+    result.algName    = alg.Name();
     return result;
 }
 
-class BfsAlgorithm final : public SearchAlgorithm{
+// BFS is the baseline search: cheap, honest, and completely ignores terrain cost
+class BfsAlgorithm final : public Alg{
 public:
-    [[nodiscard]] AlgorithmKind Kind() const override{ return AlgorithmKind::BFS; }
+    [[nodiscard]] AlgKind Type() const override{ return AlgKind::BFS; }
     [[nodiscard]] const char* Name() const override{ return "BFS"; }
 
-    [[nodiscard]] SearchResult Run(const GridMap& map, const AlgorithmOptions& options) const override{
+    // Run BFS and record every useful step for animation
+    [[nodiscard]] SearchRes Run(const GridMap& map, const AlgOpt& opt) const override{
         const auto begin    = Clock::now();
-        SearchResult result = EmptyResult(*this);
+        SearchRes result = EmptyResult(*this);
         result.frames.reserve(static_cast<size_t>(map.Count()) + 1);
         SearchState state(map.Count());
 
         const int start = map.Start(), goal = map.Goal();
-        if(!map.IsWalkable(start, options.profile) || !map.IsWalkable(goal, options.profile)){
-            result.elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+        if(!map.IsWalkable(start, opt.prof) || !map.IsWalkable(goal, opt.prof)){
+            result.timeMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
             state.SaveFrame(result, NO_NODE, true, false);
             return result;
         }
@@ -130,7 +144,7 @@ public:
         q.push(start);
         state.dist[static_cast<size_t>(start)] = 0.0;
         state.open[static_cast<size_t>(start)] = 1;
-        result.generatedNodes = 1;
+        result.genNodes = 1;
         state.SaveFrame(result, start, false, false);
 
         while(!q.empty()){
@@ -140,52 +154,54 @@ public:
             state.open[static_cast<size_t>(u)]      = 0;
             state.closed[static_cast<size_t>(u)]    = 1;
             ++state.step;
-            ++result.expandedNodes;
+            ++result.expNodes;
 
             if(u == goal) break;
 
-            for(const int v : map.Neighbors(u, options.allowDiagonal, options.profile)){
+            for(const int v : map.Neighbors(u, opt.diag, opt.prof)){
                 if(state.open[static_cast<size_t>(v)] || state.closed[static_cast<size_t>(v)]) continue;
                 state.parent[static_cast<size_t>(v)]    = u;
                 state.dist[static_cast<size_t>(v)]      = state.dist[static_cast<size_t>(u)] + BFS_EDGE_COST;
                 state.open[static_cast<size_t>(v)]      = 1;
                 q.push(v);
-                ++result.generatedNodes;
+                ++result.genNodes;
             }
             state.SaveFrame(result, u, false, false);
         }
 
         result.finalPath    = MakePath(state.parent, start, goal);
         result.found        = !result.finalPath.empty();
-        if(result.found) result.pathLength = PathCost(map, result.finalPath, options, true);
+        if(result.found) result.pathLen = PathCost(map, result.finalPath, opt, true);
 
-        result.elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+        result.timeMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
         ++state.step;
         state.SaveFrame(result, result.found ? goal : NO_NODE, true, result.found, result.finalPath);
         return result;
     }
 };
 
-class PrioritySearchAlgorithm : public SearchAlgorithm{
+// Shared heap-search skeleton for Dijkstra, A* and greedy
+class PrioAlg : public Alg{
 public:
-    [[nodiscard]] SearchResult Run(const GridMap& map, const AlgorithmOptions& options) const override{
+    // Run the shared priority-search loop and record visualization frames
+    [[nodiscard]] SearchRes Run(const GridMap& map, const AlgOpt& opt) const override{
         const auto begin    = Clock::now();
-        SearchResult result = EmptyResult(*this);
+        SearchRes result = EmptyResult(*this);
         result.frames.reserve(static_cast<size_t>(map.Count()) + 1);
         SearchState state(map.Count());
 
         const int start = map.Start(), goal = map.Goal();
-        if(!map.IsWalkable(start, options.profile) || !map.IsWalkable(goal, options.profile)){
-            result.elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+        if(!map.IsWalkable(start, opt.prof) || !map.IsWalkable(goal, opt.prof)){
+            result.timeMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
             state.SaveFrame(result, NO_NODE, true, false);
             return result;
         }
 
         std::priority_queue<HeapNode, std::vector<HeapNode>, std::greater<HeapNode>> heap;
-        heap.push({ __Priority(0.0, Heuristic(map, start, goal, options.allowDiagonal), options), 0.0, start });
+        heap.push({ __Priority(0.0, Heuristic(map, start, goal, opt.diag), opt), 0.0, start });
         state.dist[static_cast<size_t>(start)] = 0.0;
         state.open[static_cast<size_t>(start)] = 1;
-        result.generatedNodes = 1;
+        result.genNodes = 1;
         state.SaveFrame(result, start, false, false);
 
         while(!heap.empty()){
@@ -197,24 +213,24 @@ public:
             state.open[static_cast<size_t>(u)]      = 0;
             state.closed[static_cast<size_t>(u)]    = 1;
             ++state.step;
-            ++result.expandedNodes;
+            ++result.expNodes;
 
             if(u == goal) break;
 
-            for(const int v : map.Neighbors(u, options.allowDiagonal, options.profile)){
+            for(const int v : map.Neighbors(u, opt.diag, opt.prof)){
                 if(state.closed[static_cast<size_t>(v)]) continue;
 
                 const double newDist = state.dist[static_cast<size_t>(u)]
-                                     + map.StepCost(u, v, options.terrainWeight, options.heightWeight, options.profile);
+                                     + map.StepCost(u, v, opt.terrW, opt.hgtW, opt.prof);
                 if(newDist >= state.dist[static_cast<size_t>(v)]) continue;
 
                 state.dist[static_cast<size_t>(v)]      = newDist;
                 state.parent[static_cast<size_t>(v)]    = u;
-                heap.push({ __Priority(newDist, Heuristic(map, v, goal, options.allowDiagonal), options), newDist, v });
+                heap.push({ __Priority(newDist, Heuristic(map, v, goal, opt.diag), opt), newDist, v });
 
                 if(!state.open[static_cast<size_t>(v)]){
                     state.open[static_cast<size_t>(v)] = 1;
-                    ++result.generatedNodes;
+                    ++result.genNodes;
                 }
             }
             state.SaveFrame(result, u, false, false);
@@ -222,82 +238,93 @@ public:
 
         result.finalPath    = MakePath(state.parent, start, goal);
         result.found        = !result.finalPath.empty();
-        if(result.found) result.pathLength = PathCost(map, result.finalPath, options, false);
+        if(result.found) result.pathLen = PathCost(map, result.finalPath, opt, false);
 
-        result.elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
+        result.timeMs = std::chrono::duration<double, std::milli>(Clock::now() - begin).count();
         ++state.step;
         state.SaveFrame(result, result.found ? goal : NO_NODE, true, result.found, result.finalPath);
         return result;
     }
 
 private:
-    // same heap, different f(x); another trick from your dad SDLTF
-    [[nodiscard]] virtual double __Priority(double dist, double heuristic, const AlgorithmOptions& options) const = 0;
+    // same heap, different f(x)
+    // another trick from your dad SDLTF
+    [[nodiscard]] virtual double __Priority(double dist, double heuristic, const AlgOpt& opt) const = 0;
 };
 
-class DijkstraAlgorithm final : public PrioritySearchAlgorithm{
+// Dijkstra
+class DijkstraAlg final : public PrioAlg{
 public:
-    [[nodiscard]] AlgorithmKind Kind() const override{ return AlgorithmKind::Dijkstra; }
+    [[nodiscard]] AlgKind Type() const override{ return AlgKind::Dijkstra; }
     [[nodiscard]] const char*   Name() const override{ return "Dijkstra"; }
 
 private:
-    [[nodiscard]] double __Priority(double dist, double, const AlgorithmOptions&) const override{ return dist; }
+    [[nodiscard]] double __Priority(double dist, double, const AlgOpt&) const override{ return dist; }
 };
 
-class AStarAlgorithm final : public PrioritySearchAlgorithm{
+// A*
+class AStarAlg final : public PrioAlg{
 public:
-    [[nodiscard]] AlgorithmKind Kind() const override{ return AlgorithmKind::AStar; }
+    [[nodiscard]] AlgKind Type() const override{ return AlgKind::AStar; }
     [[nodiscard]] const char*   Name() const override{ return "A*"; }
 
 private:
-    [[nodiscard]] double __Priority(double dist, double heuristic, const AlgorithmOptions&) const override{ return dist + heuristic; }
+    [[nodiscard]] double __Priority(double dist, double heuristic, const AlgOpt&) const override{ return dist + heuristic; }
 };
 
-class WeightedAStarAlgorithm final : public PrioritySearchAlgorithm{
+// Weighted A*
+class WAStarAlg final : public PrioAlg{
 public:
-    [[nodiscard]] AlgorithmKind Kind() const override{ return AlgorithmKind::WeightedAStar; }
+    [[nodiscard]] AlgKind Type() const override{ return AlgKind::WAStar; }
     [[nodiscard]] const char*   Name() const override{ return "Weighted A*"; }
 
 private:
-    [[nodiscard]] double __Priority(double dist, double heuristic, const AlgorithmOptions& options) const override{
-        return dist + std::max(MIN_HEURISTIC_WEIGHT, options.heuristicWeight) * heuristic;
+    // Compute heap priority f(x)
+    // each alg gets its own flavor.
+    [[nodiscard]] double __Priority(double dist, double heuristic, const AlgOpt& opt) const override{
+        return dist + std::max(MIN_HEURISTIC_WEIGHT, opt.hW) * heuristic;
     }
 };
 
-class GreedyBestFirstAlgorithm final : public PrioritySearchAlgorithm{
+// Greedy best-first chases the goal and hopes the map is nice
+// em, greedy is greedy
+class GreedyAlg final : public PrioAlg{
 public:
-    [[nodiscard]] AlgorithmKind Kind() const override{ return AlgorithmKind::GreedyBestFirst; }
+    [[nodiscard]] AlgKind Type() const override{ return AlgKind::Greedy; }
     [[nodiscard]] const char*   Name() const override{ return "Greedy best-first"; }
 
 private:
-    [[nodiscard]] double __Priority(double, double heuristic, const AlgorithmOptions&) const override{ return heuristic; }
+    [[nodiscard]] double __Priority(double, double heuristic, const AlgOpt&) const override{ return heuristic; }
 };
 
 }
 
-const SearchAlgorithm& Pathfinder::__Algorithm(AlgorithmKind algorithm){
+// Return the singleton alg object for the selected enum
+const Alg& Pathfinder::__Algorithm(AlgKind alg){
     static const BfsAlgorithm bfs;
-    static const DijkstraAlgorithm dijkstra;
-    static const AStarAlgorithm astar;
-    static const WeightedAStarAlgorithm weightedAstar;
-    static const GreedyBestFirstAlgorithm greedy;
+    static const DijkstraAlg dijkstra;
+    static const AStarAlg astar;
+    static const WAStarAlg weightedAstar;
+    static const GreedyAlg greedy;
 
-    switch(algorithm){
-        case AlgorithmKind::BFS:             return bfs;
-        case AlgorithmKind::AStar:           return astar;
-        case AlgorithmKind::WeightedAStar:   return weightedAstar;
-        case AlgorithmKind::GreedyBestFirst: return greedy;
-        case AlgorithmKind::Dijkstra:
+    switch(alg){
+        case AlgKind::BFS:             return bfs;
+        case AlgKind::AStar:           return astar;
+        case AlgKind::WAStar:   return weightedAstar;
+        case AlgKind::Greedy: return greedy;
+        case AlgKind::Dijkstra:
         default:                             return dijkstra;
     }
 }
 
-SearchResult Pathfinder::Run(const GridMap& map, AlgorithmKind algorithm, const AlgorithmOptions& options){
-    return __Algorithm(algorithm).Run(map, options);
+// Public entry: run one alg on one map with the given opt.
+SearchRes Pathfinder::Run(const GridMap& map, AlgKind alg, const AlgOpt& opt){
+    return __Algorithm(alg).Run(map, opt);
 }
 
-std::string Pathfinder::AlgorithmName(AlgorithmKind algorithm){
-    return __Algorithm(algorithm).Name();
+// Public helper for UI text: enum in, alg name out.
+std::string Pathfinder::AlgorithmName(AlgKind alg){
+    return __Algorithm(alg).Name();
 }
 
 }

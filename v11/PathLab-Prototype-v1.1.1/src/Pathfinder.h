@@ -7,25 +7,25 @@
 
 namespace pathlab{
 
-enum class AlgorithmKind{
+enum class AlgKind{
     BFS,
     Dijkstra,
     AStar,
-    GreedyBestFirst,
-    WeightedAStar
+    Greedy,
+    WAStar
 };
 
-struct AlgorithmOptions{
-    bool    allowDiagonal   = false;
-    double  heuristicWeight = 1.4;
-    double  terrainWeight   = 1.0;
-    double  heightWeight    = 0.25;
-    MovementProfile profile = MovementProfile::Pedestrian;
+struct AlgOpt{
+    bool    diag   = false;
+    double  hW = 1.4;
+    double  terrW   = 1.0;
+    double  hgtW    = 0.25;
+    MoveProfile prof = MoveProfile::Pedestrian;
 };
 
-struct SearchFrame{
+struct SearchFrm{
     int step    = 0;
-    int current = -1;
+    int cur = -1;
     std::vector<int> open;
     std::vector<int> closed;
     std::vector<int> path;
@@ -33,34 +33,34 @@ struct SearchFrame{
     bool found      = false;
 };
 
-struct SearchResult{
-    AlgorithmKind algorithm = AlgorithmKind::Dijkstra;
-    std::string algorithmName;
-    std::vector<SearchFrame> frames;
+struct SearchRes{
+    AlgKind alg = AlgKind::Dijkstra;
+    std::string algName;
+    std::vector<SearchFrm> frames;
     std::vector<int> finalPath;
     bool    found           = false;
-    double  pathLength      = 0.0;
-    int     expandedNodes   = 0;
-    int     generatedNodes  = 0;
-    double  elapsedMs       = 0.0;
+    double  pathLen      = 0.0;
+    int     expNodes   = 0;
+    int     genNodes  = 0;
+    double  timeMs       = 0.0;
 };
 
-class SearchAlgorithm{
+class Alg{
 public:
-    virtual ~SearchAlgorithm() = default;
-    [[nodiscard]] virtual AlgorithmKind Kind() const = 0;
+    virtual ~Alg() = default;
+    [[nodiscard]] virtual AlgKind Type() const = 0;
     [[nodiscard]] virtual const char*   Name() const = 0;
-    [[nodiscard]] virtual SearchResult  Run(const GridMap& map, const AlgorithmOptions& options) const = 0;
+    [[nodiscard]] virtual SearchRes  Run(const GridMap& map, const AlgOpt& opt) const = 0;
 };
 
 class Pathfinder{
 public:
-    static SearchResult Run(const GridMap& map, AlgorithmKind algorithm, const AlgorithmOptions& options = {});
-    static std::string  AlgorithmName(AlgorithmKind algorithm);
+    static SearchRes Run(const GridMap& map, AlgKind alg, const AlgOpt& opt = {});
+    static std::string  AlgorithmName(AlgKind alg);
 
 private:
     // Keep the registry hidden; the UI only needs names and results, not the backstage drama.
-    static const SearchAlgorithm& __Algorithm(AlgorithmKind algorithm);
+    static const Alg& __Algorithm(AlgKind alg);
 };
 
 }

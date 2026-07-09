@@ -1,9 +1,14 @@
-# Modern C++ cleanup notes
+# Style pass: shorter names
 
-- Kept the public API stable.
-- Kept the double-underscore private-member style requested by the project.
-- Used `std::array` for fixed algorithm/profile/font/direction tables.
-- Replaced repeated movement-rule switches with constexpr lookup tables.
-- Added lazy-deletion checks to the priority queue search loop to skip stale heap nodes.
-- Reserved animation-frame storage before search to reduce reallocations.
-- Kept the code on C++17; no ranges/coroutines/modules, because Visual Studio + raylib projects should not be tortured for no reason.
+This pass keeps the latest project structure and shortens overlong identifiers.
+
+Main rules:
+
+- Keep public behavior unchanged.
+- Use short but readable names: `AlgKind`, `SearchRes`, `SearchFrm`, `BenchRow`, `AgentRow`.
+- Keep the double-underscore private style requested earlier.
+- Shorten private UI state names, for example `__status`, `__frmIdx`, `__animSpd`, `__selCell`, `__camDist`.
+- Shorten palette names, for example `Pal::AccentD`, `Pal::Path2CoreL`, `Pal::DioRoadD`.
+- Avoid absurd one-letter names except for local geometric variables where `x/y/r/c` are already natural.
+
+Checked with C++17 syntax-only build using a local raylib stub. Real raylib linking was not run here.

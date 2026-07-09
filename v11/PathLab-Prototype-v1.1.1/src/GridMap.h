@@ -6,12 +6,12 @@
 
 namespace pathlab{
 
-enum class CellType{
+enum class CellKind{
     Empty,
     Obstacle
 };
 
-enum class TerrainType{
+enum class Terrain{
     Plain,
     Road,
     Forest,
@@ -19,6 +19,14 @@ enum class TerrainType{
     Mountain
 };
 
+enum class MoveProfile{
+    Pedestrian,
+    Car,
+    Offroad,
+    Drone
+};
+
+// Old objs may still ask for this name after the rename. VS linker is a fossil dig site sometimes.
 enum class MovementProfile{
     Pedestrian,
     Car,
@@ -26,14 +34,24 @@ enum class MovementProfile{
     Drone
 };
 
-struct GridCoord{
+[[nodiscard]] constexpr MoveProfile ToMoveProfile(MovementProfile prof){
+    switch(prof){
+        case MovementProfile::Car:     return MoveProfile::Car;
+        case MovementProfile::Offroad: return MoveProfile::Offroad;
+        case MovementProfile::Drone:   return MoveProfile::Drone;
+        case MovementProfile::Pedestrian:
+        default:                       return MoveProfile::Pedestrian;
+    }
+}
+
+struct GPos{
     int row = 0;
     int col = 0;
 };
 
 struct Cell{
-    CellType type = CellType::Empty;
-    TerrainType terrain = TerrainType::Plain;
+    CellKind type = CellKind::Empty;
+    Terrain terrain = Terrain::Plain;
     int height = 0;
 };
 
@@ -46,21 +64,21 @@ public:
     void ClearObstacles();
     void ResetTerrain();
 
-    void GenerateRandom(float obstacleProbability, unsigned seed = std::random_device{}());
+    void GenerateRandom(float obsProb, unsigned seed = std::random_device{}());
     void GenerateTerrain(unsigned seed = std::random_device{}());
     void GenerateMaze(unsigned seed = std::random_device{}());
 
     bool SaveToFile(const std::string& path) const;
-    bool LoadFromFile(const std::string& path, std::string* errorMessage = nullptr);
+    bool LoadFromFile(const std::string& path, std::string* errMsg = nullptr);
 
     // I don't like [[nodiscard]] after all, but Visual Studio advise me to do so
-    [[nodiscard]] int Rows()    const{ return __rows; }
-    [[nodiscard]] int Cols()    const{ return __cols; }
-    [[nodiscard]] int Count()   const{ return __rows * __cols; }
+    [[nodiscard]] int Rows()    const{ return __row; }
+    [[nodiscard]] int Cols()    const{ return __col; }
+    [[nodiscard]] int Count()   const{ return __row * __col; }
 
     [[nodiscard]] bool      InBounds(int row, int col)  const;
-    [[nodiscard]] int       Index(int row, int col)     const{ return row * __cols + col; }
-    [[nodiscard]] GridCoord Coord(int index)            const{ return { index / __cols, index % __cols }; }
+    [[nodiscard]] int       Index(int row, int col)     const{ return row * __col + col; }
+    [[nodiscard]] GPos Coord(int index)            const{ return { index / __col, index % __col }; }
 
     [[nodiscard]] const Cell&   GetCell(int index) const;
     [[nodiscard]] Cell&         GetCell(int index);
@@ -68,10 +86,11 @@ public:
     [[nodiscard]] bool IsObstacle(int index)                            const;
     [[nodiscard]] bool IsWater(int index)                               const;
     [[nodiscard]] bool IsWalkable(int index)                            const;
-    [[nodiscard]] bool IsWalkable(int index, MovementProfile profile)   const;
+    [[nodiscard]] bool IsWalkable(int index, MoveProfile prof)   const;
+    [[nodiscard]] bool IsWalkable(int index, MovementProfile prof) const;
 
     void SetObstacle(int index, bool obstacle);
-    void SetTerrain(int index, TerrainType terrain);
+    void SetTerrain(int index, Terrain terrain);
     void SetHeight(int index, int height);
     void AddHeight(int index, int delta);
 
@@ -80,26 +99,28 @@ public:
     void SetStart(int index);
     void SetGoal(int index);
 
-    [[nodiscard]] std::vector<int> Neighbors(int index, bool allowDiagonal)                                             const;
-    [[nodiscard]] std::vector<int> Neighbors(int index, bool allowDiagonal, MovementProfile profile)                    const;
+    [[nodiscard]] std::vector<int> Neighbors(int index, bool diag)                                             const;
+    [[nodiscard]] std::vector<int> Neighbors(int index, bool diag, MoveProfile prof)                    const;
+    [[nodiscard]] std::vector<int> Neighbors(int index, bool diag, MovementProfile prof)                const;
     [[nodiscard]] double BaseMoveCost(int from, int to)                                                                 const;
     [[nodiscard]] double TerrainCost(int index)                                                                         const;
-    [[nodiscard]] double StepCost(int from, int to, double terrainWeight, double heightWeight)                          const;
-    [[nodiscard]] double StepCost(int from, int to, double terrainWeight, double heightWeight, MovementProfile profile) const;
+    [[nodiscard]] double StepCost(int from, int to, double terrW, double hgtW)                          const;
+    [[nodiscard]] double StepCost(int from, int to, double terrW, double hgtW, MoveProfile prof) const;
+    [[nodiscard]] double StepCost(int from, int to, double terrW, double hgtW, MovementProfile prof) const;
 
 private:
-    int __rows = 35;
-    int __cols = 55;
-    std::vector<Cell> __cells;
+    int __row = 35;
+    int __col = 55;
+    std::vector<Cell> __cell;
     int __start = 0;
     int __goal = 0;
 
     [[nodiscard]] bool __ValidIndex(int index) const;
-    [[nodiscard]] int __DefaultStart() const;
-    [[nodiscard]] int __DefaultGoal() const;
-    [[nodiscard]] int __PickRandomFreeCell(std::mt19937& rng) const;
-    void __ResetEndpoints();
-    void __EnsureEndpointsWalkable();
+    [[nodiscard]] int __DefStart() const;
+    [[nodiscard]] int __DefGoal() const;
+    [[nodiscard]] int __PickFree(std::mt19937& rng) const;
+    void __ResetEnd();
+    void __FixEnd();
 };
 
 }
